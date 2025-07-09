@@ -12,7 +12,7 @@ fn setup() -> Result<TestConfig, String> {
 #[test]
 fn test_environment_validation() {
     if let Err(msg) = validate_environment() {
-        println!("Environment validation failed: {}", msg);
+        println!("Environment validation failed: {msg}");
         println!("Skipping integration tests due to missing environment variables");
         return;
     }
@@ -24,7 +24,7 @@ fn test_client_creation_with_config() {
     let _config = match setup() {
         Ok(config) => config,
         Err(msg) => {
-            println!("Skipping test due to environment setup failure: {}", msg);
+            println!("Skipping test due to environment setup failure: {msg}");
             return;
         }
     };
