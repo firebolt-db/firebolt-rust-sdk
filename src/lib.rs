@@ -6,4 +6,4 @@ pub mod types;
 pub use client::{FireboltClient, FireboltClientFactory};
 pub use error::FireboltError;
 pub use result::{ResultSet, Row};
-pub use types::{Column, Type, ColumnRef};
+pub use types::{Column, ColumnRef, Type};

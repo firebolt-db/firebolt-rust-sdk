@@ -1,5 +1,5 @@
-use crate::types::{Column, ColumnRef};
 use crate::error::FireboltError;
+use crate::types::{Column, ColumnRef};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +14,7 @@ pub struct Row {
 }
 
 impl Row {
-    pub fn get<T>(&self, column_ref: impl Into<ColumnRef>) -> Result<T, FireboltError>
+    pub fn get<T>(&self, _column_ref: impl Into<ColumnRef>) -> Result<T, FireboltError>
     where
         T: serde::de::DeserializeOwned,
     {

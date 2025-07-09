@@ -3,16 +3,16 @@ use crate::result::ResultSet;
 use std::collections::HashMap;
 
 pub struct FireboltClient {
-    client_id: String,
-    client_secret: String,
-    token: Option<String>,
-    parameters: HashMap<String, String>,
-    engine_url: Option<String>,
-    api_endpoint: String,
+    _client_id: String,
+    _client_secret: String,
+    _token: Option<String>,
+    _parameters: HashMap<String, String>,
+    _engine_url: Option<String>,
+    _api_endpoint: String,
 }
 
 impl FireboltClient {
-    pub async fn query(&self, sql: &str) -> Result<ResultSet, FireboltError> {
+    pub async fn query(&self, _sql: &str) -> Result<ResultSet, FireboltError> {
         todo!("FireboltClient::query implementation")
     }
 
@@ -27,7 +27,7 @@ pub struct FireboltClientFactory {
     database_name: Option<String>,
     engine_name: Option<String>,
     account_name: Option<String>,
-    api_endpoint: String,
+    _api_endpoint: String,
 }
 
 impl FireboltClientFactory {
@@ -38,7 +38,7 @@ impl FireboltClientFactory {
             database_name: None,
             engine_name: None,
             account_name: None,
-            api_endpoint: "https://api.firebolt.io".to_string(),
+            _api_endpoint: "https://api.firebolt.io".to_string(),
         }
     }
 
