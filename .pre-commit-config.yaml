@@ -21,7 +21,7 @@ repos:
     hooks:
       - id: cargo-test
         name: Cargo test
-        entry: cargo test
+        entry: cargo test --lib --bins
         language: system
         types: [rust]
         pass_filenames: false
