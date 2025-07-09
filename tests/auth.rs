@@ -22,17 +22,13 @@ async fn test_authenticate_success() {
 
             assert!(
                 expiration_timestamp > current_time,
-                "Expiration timestamp should be in the future. Current: {}, Expiration: {}",
-                current_time,
-                expiration_timestamp
+                "Expiration timestamp should be in the future. Current: {current_time}, Expiration: {expiration_timestamp}"
             );
 
             let max_expected_expiration = current_time + 7200; // 2 hours buffer
             assert!(
                 expiration_timestamp <= max_expected_expiration,
-                "Expiration timestamp seems too far in the future. Expected <= {}, got {}",
-                max_expected_expiration,
-                expiration_timestamp
+                "Expiration timestamp seems too far in the future. Expected <= {max_expected_expiration}, got {expiration_timestamp}"
             );
 
             println!("✅ Authentication successful");
@@ -43,10 +39,7 @@ async fn test_authenticate_success() {
             );
         }
         Err(error) => {
-            panic!(
-                "Authentication should succeed with valid credentials, but got error: {}",
-                error
-            );
+            panic!("Authentication should succeed with valid credentials, but got error: {error}");
         }
     }
 }
@@ -66,8 +59,7 @@ async fn test_authenticate_invalid_credentials() {
     match result {
         Ok((access_token, expiration_timestamp)) => {
             panic!(
-                "Authentication should fail with invalid credentials, but got success: token={}, expiration={}",
-                access_token, expiration_timestamp
+                "Authentication should fail with invalid credentials, but got success: token={access_token}, expiration={expiration_timestamp}"
             );
         }
         Err(error_message) => {
@@ -86,12 +78,11 @@ async fn test_authenticate_invalid_credentials() {
 
             assert!(
                 contains_auth_error,
-                "Error message should indicate authentication failure. Got: '{}'",
-                error_message
+                "Error message should indicate authentication failure. Got: '{error_message}'"
             );
 
             println!("✅ Authentication correctly failed with invalid credentials");
-            println!("   Error message: {}", error_message);
+            println!("   Error message: {error_message}");
         }
     }
 }

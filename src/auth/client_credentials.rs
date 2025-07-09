@@ -17,10 +17,6 @@ struct AuthResponse {
     expires_in: u64,
 }
 
-#[derive(Deserialize)]
-struct ErrorResponse {
-    message: String,
-}
 
 pub async fn authenticate(
     client_id: String,
@@ -63,12 +59,27 @@ pub async fn authenticate(
 
         Ok((auth_response.access_token, expiration_timestamp))
     } else {
-        let error_response: ErrorResponse = response
-            .json()
+        let response_text = response
+            .text()
             .await
-            .map_err(|e| format!("Failed to parse error response: {e}"))?;
-
-        Err(error_response.message)
+            .map_err(|e| format!("Failed to read error response: {e}"))?;
+        
+        match serde_json::from_str::<serde_json::Value>(&response_text) {
+            Ok(json) => {
+                if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
+                    Err(message.to_string())
+                } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
+                    Err(error.to_string())
+                } else if let Some(error_description) = json.get("error_description").and_then(|v| v.as_str()) {
+                    Err(error_description.to_string())
+                } else {
+                    Err(format!("Authentication failed: {response_text}"))
+                }
+            }
+            Err(_) => {
+                Err(format!("Authentication failed: {response_text}"))
+            }
+        }
     }
 }
 
