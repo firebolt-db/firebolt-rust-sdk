@@ -35,10 +35,10 @@ pub mod error {
     impl fmt::Display for FireboltError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
-                FireboltError::AuthError(msg) => write!(f, "Authentication error: {}", msg),
-                FireboltError::ConnectionError(msg) => write!(f, "Connection error: {}", msg),
-                FireboltError::QueryError(msg) => write!(f, "Query error: {}", msg),
-                FireboltError::GeneralError(msg) => write!(f, "General error: {}", msg),
+                FireboltError::AuthError(msg) => write!(f, "Authentication error: {msg}"),
+                FireboltError::ConnectionError(msg) => write!(f, "Connection error: {msg}"),
+                FireboltError::QueryError(msg) => write!(f, "Query error: {msg}"),
+                FireboltError::GeneralError(msg) => write!(f, "General error: {msg}"),
             }
         }
     }

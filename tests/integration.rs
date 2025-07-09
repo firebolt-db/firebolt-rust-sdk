@@ -1,5 +1,3 @@
-
-
 use firebolt::client::Client;
 
 mod common;
@@ -13,16 +11,12 @@ fn setup() -> Result<TestConfig, String> {
 
 #[test]
 fn test_environment_validation() {
-    match validate_environment() {
-        Ok(()) => {
-            println!("All required environment variables are set");
-        }
-        Err(msg) => {
-            println!("Environment validation failed: {}", msg);
-            println!("Skipping integration tests due to missing environment variables");
-            return;
-        }
+    if let Err(msg) = validate_environment() {
+        println!("Environment validation failed: {}", msg);
+        println!("Skipping integration tests due to missing environment variables");
+        return;
     }
+    println!("All required environment variables are set");
 }
 
 #[test]
@@ -34,6 +28,6 @@ fn test_client_creation_with_config() {
             return;
         }
     };
-    
+
     let _client = Client::new();
 }
