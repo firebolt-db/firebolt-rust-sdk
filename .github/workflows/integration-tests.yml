@@ -62,9 +62,9 @@ jobs:
         env:
           FIREBOLT_CLIENT_ID: ${{ secrets.FIREBOLT_CLIENT_ID }}
           FIREBOLT_CLIENT_SECRET: ${{ secrets.FIREBOLT_CLIENT_SECRET }}
-          FIREBOLT_DATABASE: ${{ secrets.FIREBOLT_DATABASE }}
-          FIREBOLT_ENGINE: ${{ secrets.FIREBOLT_ENGINE }}
-          FIREBOLT_ACCOUNT: ${{ secrets.FIREBOLT_ACCOUNT }}
+          FIREBOLT_DATABASE: ${{ steps.setup.outputs.database_name }}
+          FIREBOLT_ENGINE: ${{ steps.setup.outputs.engine_name }}
+          FIREBOLT_ACCOUNT: ${{ vars.FIREBOLT_ACCOUNT }}
           FIREBOLT_API_ENDPOINT: "api.staging.firebolt.io"
         run: cargo test --test integration --verbose
 
