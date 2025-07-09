@@ -2,20 +2,22 @@ name: Integration Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to run tests against'
+  workflow_call:
+    secrets:
+      FIREBOLT_CLIENT_ID:
         required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
+      FIREBOLT_CLIENT_SECRET:
+        required: true
+      FIREBOLT_DATABASE:
+        required: true
+      FIREBOLT_ENGINE:
+        required: true
+      FIREBOLT_ACCOUNT:
+        required: true
 
 jobs:
   integration-tests:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +46,15 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Setup database and engine
+        id: setup
+        uses: firebolt-db/integration-testing-setup@v2
+        with:
+          firebolt-client-id: ${{ secrets.FIREBOLT_CLIENT_ID }}
+          firebolt-client-secret: ${{ secrets.FIREBOLT_CLIENT_SECRET }}
+          account: ${{ vars.FIREBOLT_ACCOUNT }}
+          api-endpoint: "api.staging.firebolt.io"
+
       - name: Build
         run: cargo build --verbose
 
@@ -54,7 +65,7 @@ jobs:
           FIREBOLT_DATABASE: ${{ secrets.FIREBOLT_DATABASE }}
           FIREBOLT_ENGINE: ${{ secrets.FIREBOLT_ENGINE }}
           FIREBOLT_ACCOUNT: ${{ secrets.FIREBOLT_ACCOUNT }}
-          FIREBOLT_API_ENDPOINT: ${{ secrets.FIREBOLT_API_ENDPOINT }}
+          FIREBOLT_API_ENDPOINT: "api.staging.firebolt.io"
         run: cargo test --test integration --verbose
 
       - name: Upload test results

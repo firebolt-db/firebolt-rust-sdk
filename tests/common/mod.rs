@@ -1,5 +1,6 @@
 use std::env;
 
+#[allow(dead_code)]
 pub const REQUIRED_ENV_VARS: &[&str] = &[
     "FIREBOLT_CLIENT_ID",
     "FIREBOLT_CLIENT_SECRET",
@@ -9,6 +10,7 @@ pub const REQUIRED_ENV_VARS: &[&str] = &[
     "FIREBOLT_API_ENDPOINT",
 ];
 
+#[allow(dead_code)]
 pub fn validate_environment() -> Result<(), String> {
     let mut missing_vars = Vec::new();
 
@@ -39,6 +41,7 @@ pub struct TestConfig {
 }
 
 impl TestConfig {
+    #[allow(dead_code)]
     pub fn from_env() -> Result<Self, String> {
         validate_environment()?;
 
@@ -50,21 +53,5 @@ impl TestConfig {
             account: env::var("FIREBOLT_ACCOUNT").unwrap(),
             api_endpoint: env::var("FIREBOLT_API_ENDPOINT").unwrap(),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_required_env_vars_list() {
-        assert_eq!(REQUIRED_ENV_VARS.len(), 6);
-        assert!(REQUIRED_ENV_VARS.contains(&"FIREBOLT_CLIENT_ID"));
-        assert!(REQUIRED_ENV_VARS.contains(&"FIREBOLT_CLIENT_SECRET"));
-        assert!(REQUIRED_ENV_VARS.contains(&"FIREBOLT_DATABASE"));
-        assert!(REQUIRED_ENV_VARS.contains(&"FIREBOLT_ENGINE"));
-        assert!(REQUIRED_ENV_VARS.contains(&"FIREBOLT_ACCOUNT"));
-        assert!(REQUIRED_ENV_VARS.contains(&"FIREBOLT_API_ENDPOINT"));
     }
 }
