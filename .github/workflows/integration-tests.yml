@@ -1,0 +1,76 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      FIREBOLT_CLIENT_ID:
+        required: true
+      FIREBOLT_CLIENT_SECRET:
+        required: true
+      FIREBOLT_DATABASE:
+        required: true
+      FIREBOLT_ENGINE:
+        required: true
+      FIREBOLT_ACCOUNT:
+        required: true
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup database and engine
+        id: setup
+        uses: firebolt-db/integration-testing-setup@v2
+        with:
+          firebolt-client-id: ${{ secrets.FIREBOLT_CLIENT_ID }}
+          firebolt-client-secret: ${{ secrets.FIREBOLT_CLIENT_SECRET }}
+          account: ${{ vars.FIREBOLT_ACCOUNT }}
+          api-endpoint: "api.staging.firebolt.io"
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run integration tests
+        env:
+          FIREBOLT_CLIENT_ID: ${{ secrets.FIREBOLT_CLIENT_ID }}
+          FIREBOLT_CLIENT_SECRET: ${{ secrets.FIREBOLT_CLIENT_SECRET }}
+          FIREBOLT_DATABASE: ${{ steps.setup.outputs.database_name }}
+          FIREBOLT_ENGINE: ${{ steps.setup.outputs.engine_name }}
+          FIREBOLT_ACCOUNT: ${{ vars.FIREBOLT_ACCOUNT }}
+          FIREBOLT_API_ENDPOINT: "api.staging.firebolt.io"
+        run: cargo test --test integration --verbose
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results
+          path: target/debug/deps/integration-*

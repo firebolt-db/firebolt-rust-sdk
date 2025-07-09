@@ -1,0 +1,19 @@
+[package]
+name = "firebolt"
+version = "0.0.1"
+authors = ["Firebolt <support@firebolt.io>"]
+description = "A Rust SDK for Firebolt"
+homepage = "https://www.firebolt.io"
+repository = "https://github.com/firebolt-db/firebolt-rust-sdk"
+license = "Apache-2.0"
+keywords = ["firebolt", "database", "sql", "analytics"]
+categories = ["database", "api-bindings"]
+readme = "README.md"
+
+[dependencies]
+
+[dev-dependencies]
+
+[lib]
+name = "firebolt"
+path = "src/lib.rs"
