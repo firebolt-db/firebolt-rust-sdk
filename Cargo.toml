@@ -1,7 +1,6 @@
 [package]
 name = "firebolt"
-version = "0.1.0"
-edition = "2021"
+version = "0.0.1"
 authors = ["Firebolt <support@firebolt.io>"]
 description = "A Rust SDK for Firebolt"
 homepage = "https://www.firebolt.io"
