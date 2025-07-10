@@ -8,7 +8,7 @@ fn get_auth_config() -> Result<(String, String, String), String> {
         .map_err(|_| "Missing FIREBOLT_CLIENT_SECRET environment variable")?;
     let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
         .map_err(|_| "Missing FIREBOLT_API_ENDPOINT environment variable")?;
-    
+
     Ok((client_id, client_secret, api_endpoint))
 }
 

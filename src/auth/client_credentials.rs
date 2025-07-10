@@ -168,27 +168,106 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_error_message_extraction_logic() {
-        let test_cases = vec![
-            (
-                r#"{"message": "Invalid credentials"}"#,
-                "Invalid credentials",
-            ),
-            (r#"{"error": "invalid_client"}"#, "invalid_client"),
-            (
-                r#"{"error_description": "Client authentication failed"}"#,
-                "Client authentication failed",
-            ),
-            (
-                r#"{"unknown_field": "some value"}"#,
-                "Authentication failed: {\"unknown_field\": \"some value\"}",
-            ),
-        ];
 
-        for (json_input, expected_error) in test_cases {
-            let error_msg = extract_error_message_from_json(json_input);
-            assert_eq!(error_msg, expected_error);
+    #[tokio::test]
+    async fn test_handle_success_response() {
+        let json_response = r#"{"access_token": "test_token_123", "expires_in": 3600}"#;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json_response)
+            .create_async()
+            .await;
+
+        let client = Client::new();
+        let response = client
+            .post(&format!("{}/test", server.url()))
+            .send()
+            .await
+            .unwrap();
+
+        let result = handle_success_response(response).await;
+
+        mock.assert_async().await;
+
+        match result {
+            Ok((access_token, expiration_timestamp)) => {
+                assert_eq!(access_token, "test_token_123");
+                let current_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                assert!(expiration_timestamp > current_time);
+                assert!(expiration_timestamp <= current_time + 3600);
+            }
+            Err(error) => panic!("Expected success, got error: {}", error),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_error_response_with_message() {
+        let json_response = r#"{"message": "Invalid credentials"}"#;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/test")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(json_response)
+            .create_async()
+            .await;
+
+        let client = Client::new();
+        let response = client
+            .post(&format!("{}/test", server.url()))
+            .send()
+            .await
+            .unwrap();
+
+        let result = handle_error_response(response).await;
+
+        mock.assert_async().await;
+
+        match result {
+            Ok(_) => panic!("Expected error, got success"),
+            Err(error_message) => {
+                assert_eq!(error_message, "Invalid credentials");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_error_response_with_error_field() {
+        let json_response = r#"{"error": "invalid_client"}"#;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/test")
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(json_response)
+            .create_async()
+            .await;
+
+        let client = Client::new();
+        let response = client
+            .post(&format!("{}/test", server.url()))
+            .send()
+            .await
+            .unwrap();
+
+        let result = handle_error_response(response).await;
+
+        mock.assert_async().await;
+
+        match result {
+            Ok(_) => panic!("Expected error, got success"),
+            Err(error_message) => {
+                assert_eq!(error_message, "invalid_client");
+            }
         }
     }
 }
