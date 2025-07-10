@@ -203,6 +203,14 @@ mod tests {
             .create_async()
             .await;
 
+        let _mock_success = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
         let mut client = create_test_client();
         client._engine_url = server.url();
 
@@ -211,6 +219,7 @@ mod tests {
             .await;
 
         mock_401.assert_async().await;
+
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -262,7 +271,9 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Query(_)));
+        assert!(format!("{error:?}").contains("Internal Server Error"));
     }
 
     #[test]
@@ -280,6 +291,34 @@ mod tests {
         let mut client = create_test_client();
         client.set_token("new_token".to_string());
         assert_eq!(client._token, "new_token".to_string());
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_request_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_header("User-Agent", crate::version::user_agent().as_str())
+            .match_header(
+                "Firebolt-Protocol-Version",
+                crate::version::PROTOCOL_VERSION,
+            )
+            .match_header("Authorization", "Bearer test_token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
     }
 
     #[test]
