@@ -32,11 +32,13 @@ impl Row {
             }
         };
 
-        let value = self.data.get(index).ok_or_else(|| {
-            FireboltError::Query(format!("Column index {index} out of bounds"))
-        })?;
+        let value = self
+            .data
+            .get(index)
+            .ok_or_else(|| FireboltError::Query(format!("Column index {index} out of bounds")))?;
 
-        serde_json::from_value(value.clone())
-            .map_err(|e| FireboltError::Serialization(format!("Failed to deserialize column value: {e}")))
+        serde_json::from_value(value.clone()).map_err(|e| {
+            FireboltError::Serialization(format!("Failed to deserialize column value: {e}"))
+        })
     }
 }
