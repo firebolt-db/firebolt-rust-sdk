@@ -44,41 +44,49 @@ pub async fn authenticate(
     let status = response.status();
 
     if status.is_success() {
-        let auth_response: AuthResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {e}"))?;
-
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| format!("Failed to get current time: {e}"))?
-            .as_secs();
-
-        let expiration_timestamp = current_time + auth_response.expires_in;
-
-        Ok((auth_response.access_token, expiration_timestamp))
+        handle_success_response(response).await
     } else {
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read error response: {e}"))?;
+        handle_error_response(response).await
+    }
+}
 
-        match serde_json::from_str::<serde_json::Value>(&response_text) {
-            Ok(json) => {
-                if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
-                    Err(message.to_string())
-                } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
-                    Err(error.to_string())
-                } else if let Some(error_description) =
-                    json.get("error_description").and_then(|v| v.as_str())
-                {
-                    Err(error_description.to_string())
-                } else {
-                    Err(format!("Authentication failed: {response_text}"))
-                }
+async fn handle_success_response(response: reqwest::Response) -> Result<(String, u64), String> {
+    let auth_response: AuthResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
+
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Failed to get current time: {e}"))?
+        .as_secs();
+
+    let expiration_timestamp = current_time + auth_response.expires_in;
+
+    Ok((auth_response.access_token, expiration_timestamp))
+}
+
+async fn handle_error_response(response: reqwest::Response) -> Result<(String, u64), String> {
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read error response: {e}"))?;
+
+    match serde_json::from_str::<serde_json::Value>(&response_text) {
+        Ok(json) => {
+            if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
+                Err(message.to_string())
+            } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
+                Err(error.to_string())
+            } else if let Some(error_description) =
+                json.get("error_description").and_then(|v| v.as_str())
+            {
+                Err(error_description.to_string())
+            } else {
+                Err(format!("Authentication failed: {response_text}"))
             }
-            Err(_) => Err(format!("Authentication failed: {response_text}")),
         }
+        Err(_) => Err(format!("Authentication failed: {response_text}")),
     }
 }
 
@@ -102,7 +110,6 @@ fn validate_and_transform_endpoint(api_endpoint: &str) -> Result<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_validate_and_transform_endpoint() {
         assert_eq!(
@@ -123,5 +130,68 @@ mod tests {
         assert!(validate_and_transform_endpoint("invalid.endpoint.com").is_err());
         assert!(validate_and_transform_endpoint("api.invalid.com").is_err());
         assert!(validate_and_transform_endpoint("wrong.dev.firebolt.io").is_err());
+    }
+
+    #[test]
+    fn test_auth_request_serialization() {
+        let auth_request = AuthRequest {
+            client_id: "test_client".to_string(),
+            client_secret: "test_secret".to_string(),
+            grant_type: "client_credentials".to_string(),
+            audience: "https://api.firebolt.io".to_string(),
+        };
+
+        let json = serde_json::to_string(&auth_request).unwrap();
+        assert!(json.contains("\"client_id\":\"test_client\""));
+        assert!(json.contains("\"client_secret\":\"test_secret\""));
+        assert!(json.contains("\"grant_type\":\"client_credentials\""));
+        assert!(json.contains("\"audience\":\"https://api.firebolt.io\""));
+    }
+
+    #[test]
+    fn test_auth_response_deserialization() {
+        let json = r#"{"access_token": "test_token_123", "expires_in": 3600}"#;
+        let auth_response: AuthResponse = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(auth_response.access_token, "test_token_123");
+        assert_eq!(auth_response.expires_in, 3600);
+    }
+
+    #[test]
+    fn test_auth_response_deserialization_invalid() {
+        let json = r#"{"invalid": "data"}"#;
+        let result: Result<AuthResponse, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_message_extraction() {
+        let test_cases = vec![
+            (r#"{"message": "Invalid credentials"}"#, "Invalid credentials"),
+            (r#"{"error": "invalid_client"}"#, "invalid_client"),
+            (r#"{"error_description": "Client authentication failed"}"#, "Client authentication failed"),
+            (r#"{"unknown_field": "some value"}"#, "Authentication failed: {\"unknown_field\": \"some value\"}"),
+        ];
+
+        for (json_input, expected_error) in test_cases {
+            match serde_json::from_str::<serde_json::Value>(json_input) {
+                Ok(json) => {
+                    let error_msg = if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
+                        message.to_string()
+                    } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
+                        error.to_string()
+                    } else if let Some(error_description) = json.get("error_description").and_then(|v| v.as_str()) {
+                        error_description.to_string()
+                    } else {
+                        format!("Authentication failed: {json_input}")
+                    };
+                    assert_eq!(error_msg, expected_error);
+                }
+                Err(_) => {
+                    let error_msg = format!("Authentication failed: {json_input}");
+                    assert_eq!(error_msg, expected_error);
+                }
+            }
+        }
     }
 }
