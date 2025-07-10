@@ -109,6 +109,24 @@ impl FireboltClient {
     pub fn builder() -> FireboltClientFactory {
         FireboltClientFactory::new()
     }
+
+    #[doc(hidden)]
+    pub fn new_for_testing(
+        client_id: String,
+        client_secret: String,
+        token: String,
+        engine_url: String,
+        api_endpoint: String,
+    ) -> Self {
+        Self {
+            _client_id: client_id,
+            _client_secret: client_secret,
+            _token: token,
+            _parameters: std::collections::HashMap::new(),
+            _engine_url: engine_url,
+            _api_endpoint: api_endpoint,
+        }
+    }
 }
 
 fn ensure_trailing_slash(url: &str) -> String {

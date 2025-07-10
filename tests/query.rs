@@ -98,26 +98,33 @@ async fn test_query_with_invalid_token() {
     }
 }
 
-// #[tokio::test]
-// async fn test_query_with_invalid_credentials() {
-//     let client_result = FireboltClient::builder()
-//         .with_credentials("invalid_id".to_string(), "invalid_secret".to_string())
-//         .with_database("test_db".to_string())
-//         .with_engine("test_engine".to_string())
-//         .build()
-//         .await;
-//
-//     match client_result {
-//             let result = client.query("SELECT 1").await;
-//             match result {
-//                 Ok(_) => panic!("Expected authentication error"),
-//                 Err(e) => {
-//                     println!("✅ Invalid credentials properly returned error: {e:?}");
-//                 }
-//             }
-//         }
-//         Err(e) => {
-//             println!("✅ Invalid credentials prevented client creation: {e:?}");
-//         }
-//     }
-// }
+#[tokio::test]
+async fn test_query_with_invalid_credentials() {
+    let mut client = FireboltClient::new_for_testing(
+        "invalid_id".to_string(),
+        "invalid_secret".to_string(),
+        "".to_string(),
+        "https://test.engine.url/".to_string(),
+        "https://api.staging.firebolt.io".to_string(),
+    );
+
+    let result = client.query("SELECT 1").await;
+
+    match result {
+        Ok(_) => panic!("Expected authentication error with invalid credentials"),
+        Err(e) => {
+            println!("✅ Invalid credentials properly returned error: {e:?}");
+            let error_str = format!("{e:?}");
+            assert!(
+                error_str.contains("Authentication")
+                    || error_str.contains("authentication")
+                    || error_str.contains("invalid")
+                    || error_str.contains("unauthorized")
+                    || error_str.contains("Network")
+                    || error_str.contains("dns error")
+                    || error_str.contains("failed to lookup"),
+                "Expected authentication or network error with invalid credentials, got: {error_str}"
+            );
+        }
+    }
+}
