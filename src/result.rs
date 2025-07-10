@@ -14,6 +14,10 @@ pub struct Row {
 }
 
 impl Row {
+    pub fn new(data: Vec<serde_json::Value>) -> Self {
+        Self { data }
+    }
+
     pub fn get<T>(&self, _column_ref: impl Into<ColumnRef>) -> Result<T, FireboltError>
     where
         T: serde::de::DeserializeOwned,

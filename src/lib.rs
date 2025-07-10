@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod client;
 pub mod error;
+pub mod parser;
 pub mod result;
 pub mod types;
 pub mod version;
