@@ -152,7 +152,7 @@ mod tests {
     fn test_auth_response_deserialization() {
         let json = r#"{"access_token": "test_token_123", "expires_in": 3600}"#;
         let auth_response: AuthResponse = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(auth_response.access_token, "test_token_123");
         assert_eq!(auth_response.expires_in, 3600);
     }
@@ -167,24 +167,36 @@ mod tests {
     #[test]
     fn test_error_message_extraction() {
         let test_cases = vec![
-            (r#"{"message": "Invalid credentials"}"#, "Invalid credentials"),
+            (
+                r#"{"message": "Invalid credentials"}"#,
+                "Invalid credentials",
+            ),
             (r#"{"error": "invalid_client"}"#, "invalid_client"),
-            (r#"{"error_description": "Client authentication failed"}"#, "Client authentication failed"),
-            (r#"{"unknown_field": "some value"}"#, "Authentication failed: {\"unknown_field\": \"some value\"}"),
+            (
+                r#"{"error_description": "Client authentication failed"}"#,
+                "Client authentication failed",
+            ),
+            (
+                r#"{"unknown_field": "some value"}"#,
+                "Authentication failed: {\"unknown_field\": \"some value\"}",
+            ),
         ];
 
         for (json_input, expected_error) in test_cases {
             match serde_json::from_str::<serde_json::Value>(json_input) {
                 Ok(json) => {
-                    let error_msg = if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
-                        message.to_string()
-                    } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
-                        error.to_string()
-                    } else if let Some(error_description) = json.get("error_description").and_then(|v| v.as_str()) {
-                        error_description.to_string()
-                    } else {
-                        format!("Authentication failed: {json_input}")
-                    };
+                    let error_msg =
+                        if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
+                            message.to_string()
+                        } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
+                            error.to_string()
+                        } else if let Some(error_description) =
+                            json.get("error_description").and_then(|v| v.as_str())
+                        {
+                            error_description.to_string()
+                        } else {
+                            format!("Authentication failed: {json_input}")
+                        };
                     assert_eq!(error_msg, expected_error);
                 }
                 Err(_) => {
