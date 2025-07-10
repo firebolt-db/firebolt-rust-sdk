@@ -1,6 +1,12 @@
 use crate::error::FireboltError;
 use crate::result::ResultSet;
 use std::collections::HashMap;
+use url::Url;
+
+const HEADER_UPDATE_ENDPOINT: &str = "Firebolt-Update-Endpoint";
+const HEADER_UPDATE_PARAMETERS: &str = "Firebolt-Update-Parameters";
+const HEADER_RESET_SESSION: &str = "Firebolt-Reset-Session";
+const HEADER_REMOVE_PARAMETERS: &str = "Firebolt-Remove-Parameters";
 
 pub struct FireboltClient {
     _client_id: String,
@@ -69,6 +75,7 @@ impl FireboltClient {
             })?;
             Err(crate::parser::parse_server_error(body))
         } else if status.is_success() {
+            self.process_response_headers(&response)?;
             let body = response
                 .text()
                 .await
@@ -108,6 +115,92 @@ impl FireboltClient {
 
     pub fn builder() -> FireboltClientFactory {
         FireboltClientFactory::new()
+    }
+
+    fn process_response_headers(
+        &mut self,
+        response: &reqwest::Response,
+    ) -> Result<(), FireboltError> {
+        if let Some(endpoint_header) = response.headers().get(HEADER_UPDATE_ENDPOINT) {
+            let endpoint_str = endpoint_header.to_str().map_err(|e| {
+                FireboltError::HeaderParsing(format!("Invalid endpoint header: {e}"))
+            })?;
+
+            let url = Url::parse(endpoint_str)
+                .map_err(|e| FireboltError::HeaderParsing(format!("Invalid endpoint URL: {e}")))?;
+
+            let base_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+            let path = url.path();
+            self._engine_url = if path == "/" || path.is_empty() {
+                base_url
+            } else {
+                format!("{base_url}{path}")
+            };
+
+            for (key, value) in url.query_pairs() {
+                self._parameters.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        if let Some(params_header) = response.headers().get(HEADER_UPDATE_PARAMETERS) {
+            let params_str = params_header.to_str().map_err(|e| {
+                FireboltError::HeaderParsing(format!("Invalid parameters header: {e}"))
+            })?;
+
+            for param_pair in params_str.split(',') {
+                let param_pair = param_pair.trim();
+                if param_pair.is_empty() {
+                    continue;
+                }
+
+                let parts: Vec<&str> = param_pair.splitn(2, '=').collect();
+                if parts.len() != 2 {
+                    return Err(FireboltError::HeaderParsing(format!(
+                        "Invalid parameter format: {param_pair}"
+                    )));
+                }
+
+                let key = parts[0].trim();
+                let value = parts[1].trim();
+
+                if key.is_empty() {
+                    return Err(FireboltError::HeaderParsing(
+                        "Parameter key cannot be empty".to_string(),
+                    ));
+                }
+
+                self._parameters.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        if response.headers().contains_key(HEADER_RESET_SESSION) {
+            let database = self._parameters.get("database").cloned();
+            let engine = self._parameters.get("engine").cloned();
+
+            self._parameters.clear();
+
+            if let Some(db) = database {
+                self._parameters.insert("database".to_string(), db);
+            }
+            if let Some(eng) = engine {
+                self._parameters.insert("engine".to_string(), eng);
+            }
+        }
+
+        if let Some(remove_header) = response.headers().get(HEADER_REMOVE_PARAMETERS) {
+            let remove_str = remove_header.to_str().map_err(|e| {
+                FireboltError::HeaderParsing(format!("Invalid remove parameters header: {e}"))
+            })?;
+
+            for param_name in remove_str.split(',') {
+                let param_name = param_name.trim();
+                if !param_name.is_empty() {
+                    self._parameters.remove(param_name);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -343,5 +436,237 @@ mod tests {
             _engine_url: "https://test.engine.url/".to_string(),
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_update_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(
+                HEADER_UPDATE_ENDPOINT,
+                "https://new.engine.url/path?param1=value1&param2=value2",
+            )
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(client._engine_url, "https://new.engine.url/path");
+        assert_eq!(
+            client._parameters.get("param1"),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            client._parameters.get("param2"),
+            Some(&"value2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_update_parameters() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(
+                HEADER_UPDATE_PARAMETERS,
+                "database=new_db,engine=new_engine,custom=value",
+            )
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(
+            client._parameters.get("database"),
+            Some(&"new_db".to_string())
+        );
+        assert_eq!(
+            client._parameters.get("engine"),
+            Some(&"new_engine".to_string())
+        );
+        assert_eq!(client._parameters.get("custom"), Some(&"value".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_reset_session() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_RESET_SESSION, "true")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+        client
+            ._parameters
+            .insert("database".to_string(), "test_db".to_string());
+        client
+            ._parameters
+            .insert("engine".to_string(), "test_engine".to_string());
+        client
+            ._parameters
+            .insert("custom_param".to_string(), "custom_value".to_string());
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(
+            client._parameters.get("database"),
+            Some(&"test_db".to_string())
+        );
+        assert_eq!(
+            client._parameters.get("engine"),
+            Some(&"test_engine".to_string())
+        );
+        assert_eq!(client._parameters.get("custom_param"), None);
+        assert_eq!(client._parameters.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_remove_parameters() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_REMOVE_PARAMETERS, "param1,param3")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+        client
+            ._parameters
+            .insert("param1".to_string(), "value1".to_string());
+        client
+            ._parameters
+            .insert("param2".to_string(), "value2".to_string());
+        client
+            ._parameters
+            .insert("param3".to_string(), "value3".to_string());
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(client._parameters.get("param1"), None);
+        assert_eq!(
+            client._parameters.get("param2"),
+            Some(&"value2".to_string())
+        );
+        assert_eq!(client._parameters.get("param3"), None);
+        assert_eq!(client._parameters.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_invalid_endpoint_url() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_UPDATE_ENDPOINT, "invalid-url")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::HeaderParsing(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_invalid_parameters_format() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_UPDATE_PARAMETERS, "invalid-format-no-equals")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::HeaderParsing(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_empty_parameter_key() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_UPDATE_PARAMETERS, "=value")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_client();
+        client._engine_url = server.url();
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::HeaderParsing(_)
+        ));
     }
 }
