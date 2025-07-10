@@ -1,15 +1,23 @@
 use firebolt::authenticate;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod common;
-use common::TestConfig;
+fn get_auth_config() -> Result<(String, String, String), String> {
+    let client_id = std::env::var("FIREBOLT_CLIENT_ID")
+        .map_err(|_| "Missing FIREBOLT_CLIENT_ID environment variable")?;
+    let client_secret = std::env::var("FIREBOLT_CLIENT_SECRET")
+        .map_err(|_| "Missing FIREBOLT_CLIENT_SECRET environment variable")?;
+    let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
+        .map_err(|_| "Missing FIREBOLT_API_ENDPOINT environment variable")?;
+    
+    Ok((client_id, client_secret, api_endpoint))
+}
 
 #[tokio::test]
 async fn test_authenticate_success() {
-    let config = TestConfig::from_env()
-        .expect("Failed to load test configuration from environment variables");
+    let (client_id, client_secret, api_endpoint) = get_auth_config()
+        .expect("Failed to load authentication configuration from environment variables");
 
-    let result = authenticate(config.client_id, config.client_secret, config.api_endpoint).await;
+    let result = authenticate(client_id, client_secret, api_endpoint).await;
 
     match result {
         Ok((access_token, expiration_timestamp)) => {
@@ -46,13 +54,13 @@ async fn test_authenticate_success() {
 
 #[tokio::test]
 async fn test_authenticate_invalid_credentials() {
-    let config = TestConfig::from_env()
-        .expect("Failed to load test configuration from environment variables");
+    let (_, _, api_endpoint) = get_auth_config()
+        .expect("Failed to load authentication configuration from environment variables");
 
     let result = authenticate(
         "invalid_client_id".to_string(),
         "invalid_client_secret".to_string(),
-        config.api_endpoint,
+        api_endpoint,
     )
     .await;
 

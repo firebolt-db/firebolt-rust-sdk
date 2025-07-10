@@ -72,21 +72,25 @@ async fn handle_error_response(response: reqwest::Response) -> Result<(String, u
         .await
         .map_err(|e| format!("Failed to read error response: {e}"))?;
 
-    match serde_json::from_str::<serde_json::Value>(&response_text) {
+    Err(extract_error_message_from_json(&response_text))
+}
+
+fn extract_error_message_from_json(response_text: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(response_text) {
         Ok(json) => {
             if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
-                Err(message.to_string())
+                message.to_string()
             } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
-                Err(error.to_string())
+                error.to_string()
             } else if let Some(error_description) =
                 json.get("error_description").and_then(|v| v.as_str())
             {
-                Err(error_description.to_string())
+                error_description.to_string()
             } else {
-                Err(format!("Authentication failed: {response_text}"))
+                format!("Authentication failed: {response_text}")
             }
         }
-        Err(_) => Err(format!("Authentication failed: {response_text}")),
+        Err(_) => format!("Authentication failed: {response_text}"),
     }
 }
 
@@ -165,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn test_error_message_extraction() {
+    fn test_error_message_extraction_logic() {
         let test_cases = vec![
             (
                 r#"{"message": "Invalid credentials"}"#,
@@ -183,27 +187,8 @@ mod tests {
         ];
 
         for (json_input, expected_error) in test_cases {
-            match serde_json::from_str::<serde_json::Value>(json_input) {
-                Ok(json) => {
-                    let error_msg =
-                        if let Some(message) = json.get("message").and_then(|v| v.as_str()) {
-                            message.to_string()
-                        } else if let Some(error) = json.get("error").and_then(|v| v.as_str()) {
-                            error.to_string()
-                        } else if let Some(error_description) =
-                            json.get("error_description").and_then(|v| v.as_str())
-                        {
-                            error_description.to_string()
-                        } else {
-                            format!("Authentication failed: {json_input}")
-                        };
-                    assert_eq!(error_msg, expected_error);
-                }
-                Err(_) => {
-                    let error_msg = format!("Authentication failed: {json_input}");
-                    assert_eq!(error_msg, expected_error);
-                }
-            }
+            let error_msg = extract_error_message_from_json(json_input);
+            assert_eq!(error_msg, expected_error);
         }
     }
 }
