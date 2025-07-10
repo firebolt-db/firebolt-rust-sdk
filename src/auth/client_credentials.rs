@@ -168,7 +168,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-
     #[tokio::test]
     async fn test_handle_success_response() {
         let json_response = r#"{"access_token": "test_token_123", "expires_in": 3600}"#;
@@ -184,7 +183,7 @@ mod tests {
 
         let client = Client::new();
         let response = client
-            .post(&format!("{}/test", server.url()))
+            .post(format!("{}/test", server.url()))
             .send()
             .await
             .unwrap();
@@ -203,7 +202,7 @@ mod tests {
                 assert!(expiration_timestamp > current_time);
                 assert!(expiration_timestamp <= current_time + 3600);
             }
-            Err(error) => panic!("Expected success, got error: {}", error),
+            Err(error) => panic!("Expected success, got error: {error}"),
         }
     }
 
@@ -222,7 +221,7 @@ mod tests {
 
         let client = Client::new();
         let response = client
-            .post(&format!("{}/test", server.url()))
+            .post(format!("{}/test", server.url()))
             .send()
             .await
             .unwrap();
@@ -254,7 +253,7 @@ mod tests {
 
         let client = Client::new();
         let response = client
-            .post(&format!("{}/test", server.url()))
+            .post(format!("{}/test", server.url()))
             .send()
             .await
             .unwrap();
