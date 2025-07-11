@@ -12,6 +12,8 @@ pub enum FireboltError {
     Serialization(String),
     #[error("Configuration error: {0}")]
     Configuration(String),
+    #[error("Header parsing error: {0}")]
+    HeaderParsing(String),
     #[error("Unknown error: {0}")]
     Unknown(String),
 }

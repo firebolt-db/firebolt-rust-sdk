@@ -18,10 +18,27 @@ impl Row {
         Self { data }
     }
 
-    pub fn get<T>(&self, _column_ref: impl Into<ColumnRef>) -> Result<T, FireboltError>
+    pub fn get<T>(&self, column_ref: impl Into<ColumnRef>) -> Result<T, FireboltError>
     where
         T: serde::de::DeserializeOwned,
     {
-        todo!("Row::get implementation")
+        let column_ref = column_ref.into();
+        let index = match column_ref {
+            ColumnRef::Index(i) => i,
+            ColumnRef::Name(_) => {
+                return Err(FireboltError::Query(
+                    "Column name lookup not implemented".to_string(),
+                ))
+            }
+        };
+
+        let value = self
+            .data
+            .get(index)
+            .ok_or_else(|| FireboltError::Query(format!("Column index {index} out of bounds")))?;
+
+        serde_json::from_value(value.clone()).map_err(|e| {
+            FireboltError::Serialization(format!("Failed to deserialize column value: {e}"))
+        })
     }
 }
