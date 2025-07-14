@@ -581,9 +581,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_id() {
-        let _factory = FireboltClientFactory::new()
-            .with_credentials("".to_string(), "secret".to_string())
-            .with_account("test_account".to_string());
+        let mut server = mockito::Server::new_async().await;
+
+        let _auth_mock = server
+            .mock("POST", "/oauth/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "test_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let _engine_mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io/path"}"#)
+            .create_async()
+            .await;
+
+        let api_endpoint = server
+            .url()
+            .replace("http://", "https://api.test.firebolt.io");
+        std::env::set_var("FIREBOLT_API_ENDPOINT", &api_endpoint);
 
         let factory_no_id = FireboltClientFactory {
             client_id: None,
@@ -591,10 +610,13 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
-            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+            _api_endpoint: api_endpoint,
         };
 
         let result = factory_no_id.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -604,16 +626,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_secret() {
+        let mut server = mockito::Server::new_async().await;
+
+        let _auth_mock = server
+            .mock("POST", "/oauth/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "test_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let _engine_mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io/path"}"#)
+            .create_async()
+            .await;
+
+        let api_endpoint = server
+            .url()
+            .replace("http://", "https://api.test.firebolt.io");
+        std::env::set_var("FIREBOLT_API_ENDPOINT", &api_endpoint);
+
         let factory_no_secret = FireboltClientFactory {
             client_id: Some("client_id".to_string()),
             client_secret: None,
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
-            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+            _api_endpoint: api_endpoint,
         };
 
         let result = factory_no_secret.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -623,16 +671,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_account_name() {
+        let mut server = mockito::Server::new_async().await;
+
+        let _auth_mock = server
+            .mock("POST", "/oauth/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "test_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let _engine_mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io/path"}"#)
+            .create_async()
+            .await;
+
+        let api_endpoint = server
+            .url()
+            .replace("http://", "https://api.test.firebolt.io");
+        std::env::set_var("FIREBOLT_API_ENDPOINT", &api_endpoint);
+
         let factory_no_account = FireboltClientFactory {
             client_id: Some("client_id".to_string()),
             client_secret: Some("secret".to_string()),
             database_name: None,
             engine_name: None,
             account_name: None,
-            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+            _api_endpoint: api_endpoint,
         };
 
         let result = factory_no_account.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

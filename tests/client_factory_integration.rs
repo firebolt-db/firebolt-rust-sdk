@@ -1,25 +1,28 @@
+mod common;
+
+use common::TestConfig;
 use firebolt::{FireboltClient, FireboltError};
-use std::env;
 
 #[tokio::test]
 async fn test_client_factory_build_integration_happy_path() {
-    let client_id = env::var("FIREBOLT_CLIENT_ID").expect("FIREBOLT_CLIENT_ID must be set");
-    let client_secret =
-        env::var("FIREBOLT_CLIENT_SECRET").expect("FIREBOLT_CLIENT_SECRET must be set");
-    let account = env::var("FIREBOLT_ACCOUNT").expect("FIREBOLT_ACCOUNT must be set");
-    let database = env::var("FIREBOLT_DATABASE").ok();
-    let engine = env::var("FIREBOLT_ENGINE").ok();
+    let config = match TestConfig::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            println!("Skipping integration test due to setup failure: {e}");
+            return;
+        }
+    };
 
     let mut factory = FireboltClient::builder()
-        .with_credentials(client_id, client_secret)
-        .with_account(account);
+        .with_credentials(config.client_id.clone(), config.client_secret.clone())
+        .with_account(config.account.clone());
 
-    if let Some(db) = database {
-        factory = factory.with_database(db);
+    if !config.database.is_empty() {
+        factory = factory.with_database(config.database.clone());
     }
 
-    if let Some(eng) = engine {
-        factory = factory.with_engine(eng);
+    if !config.engine.is_empty() {
+        factory = factory.with_engine(config.engine.clone());
     }
 
     let result = factory.build().await;
@@ -32,10 +35,6 @@ async fn test_client_factory_build_integration_happy_path() {
             assert!(!client.api_endpoint().is_empty());
         }
         Err(e) => {
-            if env::var("FIREBOLT_CLIENT_ID").is_err() {
-                println!("Skipping integration test - environment not configured");
-                return;
-            }
             panic!("Integration test failed: {e:?}");
         }
     }
@@ -43,14 +42,17 @@ async fn test_client_factory_build_integration_happy_path() {
 
 #[tokio::test]
 async fn test_client_factory_build_integration_no_database_no_engine() {
-    let client_id = env::var("FIREBOLT_CLIENT_ID").expect("FIREBOLT_CLIENT_ID must be set");
-    let client_secret =
-        env::var("FIREBOLT_CLIENT_SECRET").expect("FIREBOLT_CLIENT_SECRET must be set");
-    let account = env::var("FIREBOLT_ACCOUNT").expect("FIREBOLT_ACCOUNT must be set");
+    let config = match TestConfig::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            println!("Skipping integration test due to setup failure: {e}");
+            return;
+        }
+    };
 
     let factory = FireboltClient::builder()
-        .with_credentials(client_id, client_secret)
-        .with_account(account);
+        .with_credentials(config.client_id.clone(), config.client_secret.clone())
+        .with_account(config.account.clone());
 
     let result = factory.build().await;
 
@@ -62,10 +64,6 @@ async fn test_client_factory_build_integration_no_database_no_engine() {
             assert!(!client.api_endpoint().is_empty());
         }
         Err(e) => {
-            if env::var("FIREBOLT_CLIENT_ID").is_err() {
-                println!("Skipping integration test - environment not configured");
-                return;
-            }
             panic!("Integration test failed: {e:?}");
         }
     }
@@ -88,12 +86,16 @@ async fn test_client_factory_build_integration_invalid_credentials() {
 
 #[tokio::test]
 async fn test_client_factory_build_integration_invalid_account() {
-    let client_id = env::var("FIREBOLT_CLIENT_ID").expect("FIREBOLT_CLIENT_ID must be set");
-    let client_secret =
-        env::var("FIREBOLT_CLIENT_SECRET").expect("FIREBOLT_CLIENT_SECRET must be set");
+    let config = match TestConfig::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            println!("Skipping integration test due to setup failure: {e}");
+            return;
+        }
+    };
 
     let factory = FireboltClient::builder()
-        .with_credentials(client_id, client_secret)
+        .with_credentials(config.client_id.clone(), config.client_secret.clone())
         .with_account("nonexistent_account_12345".to_string());
 
     let result = factory.build().await;
@@ -101,10 +103,6 @@ async fn test_client_factory_build_integration_invalid_account() {
     match result {
         Ok(_) => panic!("Expected error for invalid account"),
         Err(e) => {
-            if env::var("FIREBOLT_CLIENT_ID").is_err() {
-                println!("Skipping integration test - environment not configured");
-                return;
-            }
             assert!(matches!(e, FireboltError::Configuration(_)));
         }
     }
