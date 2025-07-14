@@ -19,6 +19,11 @@ reqwest = { version = "0.11", features = ["json"] }
 thiserror = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 url = "2.0"
+num-bigint = { version = "0.4", features = ["serde"] }
+rust_decimal = "1.29"
+chrono = "0.4"
+regex = "1.0"
+hex = "0.4"
 
 [dev-dependencies]
 mockito = "1.0"
