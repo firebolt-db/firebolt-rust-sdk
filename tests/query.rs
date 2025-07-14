@@ -16,6 +16,7 @@ async fn test_query_integration() {
         .with_credentials(config.client_id, config.client_secret)
         .with_database(config.database)
         .with_engine(config.engine)
+        .with_account(config.account)
         .build()
         .await
         .expect("Failed to build client");
@@ -50,6 +51,7 @@ async fn test_query_invalid_sql() {
         .with_credentials(config.client_id, config.client_secret)
         .with_database(config.database)
         .with_engine(config.engine)
+        .with_account(config.account)
         .build()
         .await
         .expect("Failed to build client");
@@ -79,6 +81,7 @@ async fn test_query_with_invalid_token() {
         .with_credentials(config.client_id, config.client_secret)
         .with_database(config.database)
         .with_engine(config.engine)
+        .with_account(config.account)
         .build()
         .await
         .expect("Failed to build client");
@@ -98,26 +101,35 @@ async fn test_query_with_invalid_token() {
     }
 }
 
-// #[tokio::test]
-// async fn test_query_with_invalid_credentials() {
-//     let client_result = FireboltClient::builder()
-//         .with_credentials("invalid_id".to_string(), "invalid_secret".to_string())
-//         .with_database("test_db".to_string())
-//         .with_engine("test_engine".to_string())
-//         .build()
-//         .await;
-//
-//     match client_result {
-//             let result = client.query("SELECT 1").await;
-//             match result {
-//                 Ok(_) => panic!("Expected authentication error"),
-//                 Err(e) => {
-//                     println!("✅ Invalid credentials properly returned error: {e:?}");
-//                 }
-//             }
-//         }
-//         Err(e) => {
-//             println!("✅ Invalid credentials prevented client creation: {e:?}");
-//         }
-//     }
-// }
+#[tokio::test]
+async fn test_query_with_invalid_credentials() {
+    let config = match common::TestConfig::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            println!("Skipping integration test due to setup failure: {e}");
+            return;
+        }
+    };
+    let client_result = FireboltClient::builder()
+        .with_credentials("invalid_id".to_string(), "invalid_secret".to_string())
+        .with_database(config.database)
+        .with_engine(config.engine)
+        .with_account(config.account)
+        .build()
+        .await;
+
+    match client_result {
+        Ok(mut client) => {
+            let result = client.query("SELECT 1").await;
+            match result {
+                Ok(_) => panic!("Expected authentication error"),
+                Err(e) => {
+                    println!("✅ Invalid credentials properly returned error: {e:?}");
+                }
+            }
+        }
+        Err(e) => {
+            println!("✅ Invalid credentials prevented client creation: {e:?}");
+        }
+    }
+}

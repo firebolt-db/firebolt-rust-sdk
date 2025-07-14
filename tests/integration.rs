@@ -43,11 +43,7 @@ async fn test_use_engine_functionality() -> Result<(), Box<dyn std::error::Error
     let new_engine_name = format!("{}_new", config.engine);
 
     client
-        .query(&format!("DROP ENGINE IF EXISTS {new_engine_name}"))
-        .await?;
-
-    client
-        .query(&format!("CREATE ENGINE {new_engine_name}"))
+        .query(&format!("CREATE ENGINE IF NOT EXISTS {new_engine_name}"))
         .await?;
 
     client
@@ -68,6 +64,9 @@ async fn test_use_engine_functionality() -> Result<(), Box<dyn std::error::Error
 
     client
         .query(&format!("USE ENGINE {}", config.engine))
+        .await?;
+    client
+        .query(&format!("STOP ENGINE {new_engine_name}"))
         .await?;
     client
         .query(&format!("DROP ENGINE {new_engine_name}"))

@@ -384,7 +384,7 @@ mod tests {
             .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -414,7 +414,7 @@ mod tests {
             .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -513,7 +513,7 @@ mod tests {
             .match_header("Authorization", "Bearer test_token")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -913,7 +913,7 @@ mod tests {
                 HEADER_UPDATE_ENDPOINT,
                 "https://new.engine.url/path?param1=value1&param2=value2",
             )
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -948,7 +948,7 @@ mod tests {
                 HEADER_UPDATE_PARAMETERS,
                 "database=new_db,engine=new_engine,custom=value",
             )
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -980,7 +980,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_RESET_SESSION, "true")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -1022,7 +1022,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_REMOVE_PARAMETERS, "param1,param3")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -1061,7 +1061,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_UPDATE_PARAMETERS, "invalid-format-no-equals")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -1088,7 +1088,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_UPDATE_PARAMETERS, "=value")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
