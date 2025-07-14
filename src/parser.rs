@@ -11,7 +11,7 @@ fn parse_type(type_str: &str) -> Result<(Type, bool, Option<i32>, Option<i32>), 
         type_str
     };
 
-    if let Ok(decimal_regex) = Regex::new(r"decimal\((\d+),\s*(\d+)\)") {
+    if let Ok(decimal_regex) = Regex::new(r"(?i)decimal\((\d+),\s*(\d+)\)") {
         if let Some(captures) = decimal_regex.captures(clean_type) {
             let precision = captures[1]
                 .parse()
@@ -205,6 +205,14 @@ mod tests {
         );
         assert_eq!(
             parse_type("decimal(10, 2) null").unwrap(),
+            (Type::Decimal, true, Some(10), Some(2))
+        );
+        assert_eq!(
+            parse_type("Decimal(38, 30)").unwrap(),
+            (Type::Decimal, false, Some(38), Some(30))
+        );
+        assert_eq!(
+            parse_type("Decimal(10, 2) null").unwrap(),
             (Type::Decimal, true, Some(10), Some(2))
         );
     }
