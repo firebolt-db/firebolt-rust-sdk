@@ -8,6 +8,7 @@ const HEADER_UPDATE_PARAMETERS: &str = "Firebolt-Update-Parameters";
 const HEADER_RESET_SESSION: &str = "Firebolt-Reset-Session";
 const HEADER_REMOVE_PARAMETERS: &str = "Firebolt-Remove-Parameters";
 
+#[derive(Debug)]
 pub struct FireboltClient {
     _client_id: String,
     _client_secret: String,
@@ -89,23 +90,23 @@ impl FireboltClient {
         }
     }
 
-    fn client_id(&self) -> &str {
+    pub fn client_id(&self) -> &str {
         &self._client_id
     }
 
-    fn client_secret(&self) -> &str {
+    pub fn client_secret(&self) -> &str {
         &self._client_secret
     }
 
-    fn api_endpoint(&self) -> &str {
+    pub fn api_endpoint(&self) -> &str {
         &self._api_endpoint
     }
 
-    fn engine_url(&self) -> &str {
+    pub fn engine_url(&self) -> &str {
         &self._engine_url
     }
 
-    fn parameters(&self) -> &HashMap<String, String> {
+    pub fn parameters(&self) -> &HashMap<String, String> {
         &self._parameters
     }
 
@@ -255,7 +256,123 @@ impl FireboltClientFactory {
     }
 
     pub async fn build(self) -> Result<FireboltClient, FireboltError> {
-        todo!("FireboltClientFactory::build implementation")
+        // 1. Validate required parameters
+        let client_id = self
+            .client_id
+            .ok_or_else(|| FireboltError::Configuration("client_id is required".to_string()))?;
+        let client_secret = self
+            .client_secret
+            .ok_or_else(|| FireboltError::Configuration("client_secret is required".to_string()))?;
+        let account_name = self
+            .account_name
+            .ok_or_else(|| FireboltError::Configuration("account_name is required".to_string()))?;
+
+        let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
+            .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
+
+        let api_endpoint =
+            if api_endpoint.starts_with("https://") || api_endpoint.starts_with("http://") {
+                api_endpoint
+            } else {
+                format!("https://{api_endpoint}")
+            };
+
+        let (token, _expiration) = crate::auth::authenticate(
+            client_id.clone(),
+            client_secret.clone(),
+            api_endpoint.clone(),
+        )
+        .await
+        .map_err(FireboltError::Authentication)?;
+
+        let engine_url_endpoint = format!("{api_endpoint}/web/v3/account/{account_name}/engineUrl");
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(&engine_url_endpoint)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", crate::version::user_agent())
+            .send()
+            .await
+            .map_err(|e| FireboltError::Network(format!("Failed to get engine URL: {e}")))?;
+
+        let status = response.status();
+
+        let (engine_url, parameters) = match status.as_u16() {
+            200 => {
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|e| FireboltError::Network(format!("Failed to read response: {e}")))?;
+
+                let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                    FireboltError::Query(format!("Failed to parse engine URL response: {e}"))
+                })?;
+
+                let engine_url_str =
+                    json.get("engineUrl")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            FireboltError::Query("Missing engineUrl field in response".to_string())
+                        })?;
+
+                let url = url::Url::parse(engine_url_str)
+                    .map_err(|e| FireboltError::Query(format!("Invalid engine URL: {e}")))?;
+
+                let base_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+                let path = url.path();
+                let final_engine_url = if path == "/" || path.is_empty() {
+                    base_url
+                } else {
+                    format!("{base_url}{path}")
+                };
+
+                let mut params = HashMap::new();
+                for (key, value) in url.query_pairs() {
+                    params.insert(key.to_string(), value.to_string());
+                }
+
+                (final_engine_url, params)
+            }
+            404 => {
+                return Err(FireboltError::Configuration(format!(
+                    "Account '{account_name}' not found"
+                )));
+            }
+            _ => {
+                let body = response.text().await.map_err(|e| {
+                    FireboltError::Network(format!("Failed to read error response: {e}"))
+                })?;
+                return Err(FireboltError::Query(body));
+            }
+        };
+
+        let mut client = FireboltClient {
+            _client_id: client_id,
+            _client_secret: client_secret,
+            _token: token,
+            _parameters: parameters,
+            _engine_url: engine_url,
+            _api_endpoint: api_endpoint,
+        };
+
+        if let Some(database_name) = self.database_name {
+            let use_database_sql = format!("USE DATABASE \"{database_name}\"");
+            client
+                .query(&use_database_sql)
+                .await
+                .map_err(|e| FireboltError::Query(format!("Failed to set database: {e}")))?;
+        }
+
+        if let Some(engine_name) = self.engine_name {
+            let use_engine_sql = format!("USE ENGINE \"{engine_name}\"");
+            client
+                .query(&use_engine_sql)
+                .await
+                .map_err(|e| FireboltError::Query(format!("Failed to set engine: {e}")))?;
+        }
+
+        Ok(client)
     }
 }
 
@@ -436,6 +553,162 @@ mod tests {
             _engine_url: "https://test.engine.url/".to_string(),
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn test_build_missing_client_id() {
+        let _factory = FireboltClientFactory::new()
+            .with_credentials("".to_string(), "secret".to_string())
+            .with_account("test_account".to_string());
+
+        let factory_no_id = FireboltClientFactory {
+            client_id: None,
+            client_secret: Some("secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory_no_id.build().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_missing_client_secret() {
+        let factory_no_secret = FireboltClientFactory {
+            client_id: Some("client_id".to_string()),
+            client_secret: None,
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory_no_secret.build().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_missing_account_name() {
+        let factory_no_account = FireboltClientFactory {
+            client_id: Some("client_id".to_string()),
+            client_secret: Some("secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: None,
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory_no_account.build().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_engine_url_success() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
+
+        let factory = FireboltClientFactory {
+            client_id: Some("test_client_id".to_string()),
+            client_secret: Some("test_client_secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Authentication(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_account_not_found() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
+
+        let factory = FireboltClientFactory {
+            client_id: Some("test_client_id".to_string()),
+            client_secret: Some("test_client_secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("nonexistent_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Authentication(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_server_error() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
+
+        let factory = FireboltClientFactory {
+            client_id: Some("test_client_id".to_string()),
+            client_secret: Some("test_client_secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Authentication(_)
+        ));
+    }
+
+    #[test]
+    fn test_build_api_endpoint_from_env() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "custom.api.firebolt.io");
+
+        let _factory = FireboltClientFactory::new();
+        let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
+            .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
+
+        assert_eq!(api_endpoint, "custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[test]
+    fn test_build_api_endpoint_default() {
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
+            .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
+
+        assert_eq!(api_endpoint, "api.app.firebolt.io");
     }
 
     #[tokio::test]
