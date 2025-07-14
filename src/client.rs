@@ -342,8 +342,7 @@ impl FireboltClientFactory {
         .await
         .map_err(FireboltError::Authentication)?;
 
-        let engine_url =
-            Self::get_engine_url(&account_name, &api_endpoint, &token).await?;
+        let engine_url = Self::get_engine_url(&account_name, &api_endpoint, &token).await?;
 
         let mut client = FireboltClient {
             _client_id: client_id,
