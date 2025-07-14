@@ -234,6 +234,98 @@ impl FireboltClientFactory {
         }
     }
 
+    fn get_api_endpoint() -> String {
+        let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
+            .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
+
+        if api_endpoint.starts_with("https://") || api_endpoint.starts_with("http://") {
+            api_endpoint
+        } else {
+            format!("https://{api_endpoint}")
+        }
+    }
+
+    async fn get_engine_url(
+        account_name: &str,
+        api_endpoint: &str,
+        token: &str,
+    ) -> Result<(String, HashMap<String, String>), FireboltError> {
+        let engine_url_endpoint = format!("{api_endpoint}/web/v3/account/{account_name}/engineUrl");
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(&engine_url_endpoint)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", crate::version::user_agent())
+            .send()
+            .await
+            .map_err(|e| FireboltError::Network(format!("Failed to get engine URL: {e}")))?;
+
+        let status = response.status();
+
+        match status.as_u16() {
+            200 => {
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|e| FireboltError::Network(format!("Failed to read response: {e}")))?;
+
+                let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                    FireboltError::Query(format!("Failed to parse engine URL response: {e}"))
+                })?;
+
+                let engine_url_str =
+                    json.get("engineUrl")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            FireboltError::Query("Missing engineUrl field in response".to_string())
+                        })?;
+
+                let url = url::Url::parse(engine_url_str)
+                    .map_err(|e| FireboltError::Query(format!("Invalid engine URL: {e}")))?;
+
+                let has_explicit_port = engine_url_str
+                    .contains(&format!(":{}", url.port_or_known_default().unwrap_or(80)));
+                let base_url = if let Some(port) = url.port_or_known_default() {
+                    if has_explicit_port {
+                        format!(
+                            "{}://{}:{}",
+                            url.scheme(),
+                            url.host_str().unwrap_or(""),
+                            port
+                        )
+                    } else {
+                        format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""))
+                    }
+                } else {
+                    format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""))
+                };
+                let path = url.path();
+                let final_engine_url = if path == "/" || path.is_empty() {
+                    base_url
+                } else {
+                    format!("{base_url}{path}")
+                };
+
+                let mut params = HashMap::new();
+                for (key, value) in url.query_pairs() {
+                    params.insert(key.to_string(), value.to_string());
+                }
+
+                Ok((final_engine_url, params))
+            }
+            404 => Err(FireboltError::Configuration(format!(
+                "Account '{account_name}' not found"
+            ))),
+            _ => {
+                let body = response.text().await.map_err(|e| {
+                    FireboltError::Network(format!("Failed to read error response: {e}"))
+                })?;
+                Err(FireboltError::Query(body))
+            }
+        }
+    }
+
     pub fn with_credentials(mut self, client_id: String, client_secret: String) -> Self {
         self.client_id = Some(client_id);
         self.client_secret = Some(client_secret);
@@ -267,15 +359,7 @@ impl FireboltClientFactory {
             .account_name
             .ok_or_else(|| FireboltError::Configuration("account_name is required".to_string()))?;
 
-        let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
-            .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
-
-        let api_endpoint =
-            if api_endpoint.starts_with("https://") || api_endpoint.starts_with("http://") {
-                api_endpoint
-            } else {
-                format!("https://{api_endpoint}")
-            };
+        let api_endpoint = Self::get_api_endpoint();
 
         let (token, _expiration) = crate::auth::authenticate(
             client_id.clone(),
@@ -285,67 +369,8 @@ impl FireboltClientFactory {
         .await
         .map_err(FireboltError::Authentication)?;
 
-        let engine_url_endpoint = format!("{api_endpoint}/web/v3/account/{account_name}/engineUrl");
-        let client = reqwest::Client::new();
-
-        let response = client
-            .get(&engine_url_endpoint)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", crate::version::user_agent())
-            .send()
-            .await
-            .map_err(|e| FireboltError::Network(format!("Failed to get engine URL: {e}")))?;
-
-        let status = response.status();
-
-        let (engine_url, parameters) = match status.as_u16() {
-            200 => {
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| FireboltError::Network(format!("Failed to read response: {e}")))?;
-
-                let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-                    FireboltError::Query(format!("Failed to parse engine URL response: {e}"))
-                })?;
-
-                let engine_url_str =
-                    json.get("engineUrl")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            FireboltError::Query("Missing engineUrl field in response".to_string())
-                        })?;
-
-                let url = url::Url::parse(engine_url_str)
-                    .map_err(|e| FireboltError::Query(format!("Invalid engine URL: {e}")))?;
-
-                let base_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
-                let path = url.path();
-                let final_engine_url = if path == "/" || path.is_empty() {
-                    base_url
-                } else {
-                    format!("{base_url}{path}")
-                };
-
-                let mut params = HashMap::new();
-                for (key, value) in url.query_pairs() {
-                    params.insert(key.to_string(), value.to_string());
-                }
-
-                (final_engine_url, params)
-            }
-            404 => {
-                return Err(FireboltError::Configuration(format!(
-                    "Account '{account_name}' not found"
-                )));
-            }
-            _ => {
-                let body = response.text().await.map_err(|e| {
-                    FireboltError::Network(format!("Failed to read error response: {e}"))
-                })?;
-                return Err(FireboltError::Query(body));
-            }
-        };
+        let (engine_url, parameters) =
+            Self::get_engine_url(&account_name, &api_endpoint, &token).await?;
 
         let mut client = FireboltClient {
             _client_id: client_id,
@@ -358,10 +383,9 @@ impl FireboltClientFactory {
 
         if let Some(database_name) = self.database_name {
             let use_database_sql = format!("USE DATABASE \"{database_name}\"");
-            client
-                .query(&use_database_sql)
-                .await
-                .map_err(|e| FireboltError::Query(format!("Failed to set database: {e}")))?;
+            client.query(&use_database_sql).await.map_err(|e| {
+                FireboltError::Configuration(format!("Failed to set database: {e}"))
+            })?;
         }
 
         if let Some(engine_name) = self.engine_name {
@@ -369,7 +393,7 @@ impl FireboltClientFactory {
             client
                 .query(&use_engine_sql)
                 .await
-                .map_err(|e| FireboltError::Query(format!("Failed to set engine: {e}")))?;
+                .map_err(|e| FireboltError::Configuration(format!("Failed to set engine: {e}")))?;
         }
 
         Ok(client)
@@ -709,6 +733,151 @@ mod tests {
             .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
 
         assert_eq!(api_endpoint, "api.app.firebolt.io");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_default() {
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "https://api.app.firebolt.io");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_from_env() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "custom.api.firebolt.io");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "https://custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_with_https_prefix() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "https://custom.api.firebolt.io");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "https://custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_with_http_prefix() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "http://custom.api.firebolt.io");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "http://custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_success() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io:443/path?param1=value1&param2=value2"}"#)
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+
+        let (engine_url, parameters) = result.unwrap();
+        assert_eq!(engine_url, "https://engine.test.firebolt.io:443/path");
+        assert_eq!(parameters.get("param1"), Some(&"value1".to_string()));
+        assert_eq!(parameters.get("param2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_account_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/nonexistent/engineUrl")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("nonexistent", &server.url(), "test_token").await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_server_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(500)
+            .with_body("Internal server error")
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_invalid_json() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("invalid json")
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_missing_engine_url_field() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"otherField": "value"}"#)
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
     }
 
     #[tokio::test]
