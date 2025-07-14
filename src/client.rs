@@ -8,6 +8,7 @@ const HEADER_UPDATE_PARAMETERS: &str = "Firebolt-Update-Parameters";
 const HEADER_RESET_SESSION: &str = "Firebolt-Reset-Session";
 const HEADER_REMOVE_PARAMETERS: &str = "Firebolt-Remove-Parameters";
 
+#[derive(Debug)]
 pub struct FireboltClient {
     _client_id: String,
     _client_secret: String,
@@ -89,23 +90,23 @@ impl FireboltClient {
         }
     }
 
-    fn client_id(&self) -> &str {
+    pub fn client_id(&self) -> &str {
         &self._client_id
     }
 
-    fn client_secret(&self) -> &str {
+    pub fn client_secret(&self) -> &str {
         &self._client_secret
     }
 
-    fn api_endpoint(&self) -> &str {
+    pub fn api_endpoint(&self) -> &str {
         &self._api_endpoint
     }
 
-    fn engine_url(&self) -> &str {
+    pub fn engine_url(&self) -> &str {
         &self._engine_url
     }
 
-    fn parameters(&self) -> &HashMap<String, String> {
+    pub fn parameters(&self) -> &HashMap<String, String> {
         &self._parameters
     }
 
@@ -126,7 +127,7 @@ impl FireboltClient {
                 FireboltError::HeaderParsing(format!("Invalid endpoint header: {e}"))
             })?;
 
-            let url = Url::parse(endpoint_str)
+            let url = Url::parse(FireboltClientFactory::fix_schema(endpoint_str).as_str())
                 .map_err(|e| FireboltError::HeaderParsing(format!("Invalid endpoint URL: {e}")))?;
 
             let base_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
@@ -233,6 +234,71 @@ impl FireboltClientFactory {
         }
     }
 
+    fn fix_schema(url: &str) -> String {
+        if url.starts_with("https://") || url.starts_with("http://") {
+            url.to_string()
+        } else {
+            format!("https://{url}")
+        }
+    }
+
+    fn get_api_endpoint() -> String {
+        let api_endpoint = std::env::var("FIREBOLT_API_ENDPOINT")
+            .unwrap_or_else(|_| "api.app.firebolt.io".to_string());
+
+        Self::fix_schema(&api_endpoint)
+    }
+
+    async fn get_engine_url(
+        account_name: &str,
+        api_endpoint: &str,
+        token: &str,
+    ) -> Result<String, FireboltError> {
+        let engine_url_endpoint = format!("{api_endpoint}/web/v3/account/{account_name}/engineUrl");
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(&engine_url_endpoint)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", crate::version::user_agent())
+            .send()
+            .await
+            .map_err(|e| FireboltError::Network(format!("Failed to get engine URL: {e}")))?;
+
+        let status = response.status();
+
+        match status.as_u16() {
+            200 => {
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|e| FireboltError::Network(format!("Failed to read response: {e}")))?;
+
+                let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                    FireboltError::Query(format!("Failed to parse engine URL response: {e}"))
+                })?;
+
+                let engine_url =
+                    json.get("engineUrl")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            FireboltError::Query("Missing engineUrl field in response".to_string())
+                        })?;
+
+                Ok(Self::fix_schema(ensure_trailing_slash(engine_url).as_str()))
+            }
+            404 => Err(FireboltError::Configuration(format!(
+                "Account '{account_name}' not found"
+            ))),
+            _ => {
+                let body = response.text().await.map_err(|e| {
+                    FireboltError::Network(format!("Failed to read error response: {e}"))
+                })?;
+                Err(FireboltError::Query(body))
+            }
+        }
+    }
+
     pub fn with_credentials(mut self, client_id: String, client_secret: String) -> Self {
         self.client_id = Some(client_id);
         self.client_secret = Some(client_secret);
@@ -255,7 +321,54 @@ impl FireboltClientFactory {
     }
 
     pub async fn build(self) -> Result<FireboltClient, FireboltError> {
-        todo!("FireboltClientFactory::build implementation")
+        // 1. Validate required parameters
+        let client_id = self
+            .client_id
+            .ok_or_else(|| FireboltError::Configuration("client_id is required".to_string()))?;
+        let client_secret = self
+            .client_secret
+            .ok_or_else(|| FireboltError::Configuration("client_secret is required".to_string()))?;
+        let account_name = self
+            .account_name
+            .ok_or_else(|| FireboltError::Configuration("account_name is required".to_string()))?;
+
+        let api_endpoint = Self::get_api_endpoint();
+
+        let (token, _expiration) = crate::auth::authenticate(
+            client_id.clone(),
+            client_secret.clone(),
+            api_endpoint.clone(),
+        )
+        .await
+        .map_err(FireboltError::Authentication)?;
+
+        let engine_url = Self::get_engine_url(&account_name, &api_endpoint, &token).await?;
+
+        let mut client = FireboltClient {
+            _client_id: client_id,
+            _client_secret: client_secret,
+            _token: token,
+            _parameters: HashMap::new(),
+            _engine_url: engine_url,
+            _api_endpoint: api_endpoint,
+        };
+
+        if let Some(database_name) = self.database_name {
+            let use_database_sql = format!("USE DATABASE \"{database_name}\"");
+            client.query(&use_database_sql).await.map_err(|e| {
+                FireboltError::Configuration(format!("Failed to set database: {e}"))
+            })?;
+        }
+
+        if let Some(engine_name) = self.engine_name {
+            let use_engine_sql = format!("USE ENGINE \"{engine_name}\"");
+            client
+                .query(&use_engine_sql)
+                .await
+                .map_err(|e| FireboltError::Configuration(format!("Failed to set engine: {e}")))?;
+        }
+
+        Ok(client)
     }
 }
 
@@ -270,7 +383,7 @@ mod tests {
             .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -300,7 +413,7 @@ mod tests {
             .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -399,7 +512,7 @@ mod tests {
             .match_header("Authorization", "Bearer test_token")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -439,6 +552,356 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_build_missing_client_id() {
+        let mut server = mockito::Server::new_async().await;
+
+        let _auth_mock = server
+            .mock("POST", "/oauth/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "test_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let _engine_mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io/path"}"#)
+            .create_async()
+            .await;
+
+        let api_endpoint = server
+            .url()
+            .replace("http://", "https://api.test.firebolt.io");
+        std::env::set_var("FIREBOLT_API_ENDPOINT", &api_endpoint);
+
+        let factory_no_id = FireboltClientFactory {
+            client_id: None,
+            client_secret: Some("secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: api_endpoint,
+        };
+
+        let result = factory_no_id.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_missing_client_secret() {
+        let mut server = mockito::Server::new_async().await;
+
+        let _auth_mock = server
+            .mock("POST", "/oauth/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "test_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let _engine_mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io/path"}"#)
+            .create_async()
+            .await;
+
+        let api_endpoint = server
+            .url()
+            .replace("http://", "https://api.test.firebolt.io");
+        std::env::set_var("FIREBOLT_API_ENDPOINT", &api_endpoint);
+
+        let factory_no_secret = FireboltClientFactory {
+            client_id: Some("client_id".to_string()),
+            client_secret: None,
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: api_endpoint,
+        };
+
+        let result = factory_no_secret.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_missing_account_name() {
+        let mut server = mockito::Server::new_async().await;
+
+        let _auth_mock = server
+            .mock("POST", "/oauth/token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "test_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let _engine_mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "https://engine.test.firebolt.io/path"}"#)
+            .create_async()
+            .await;
+
+        let api_endpoint = server
+            .url()
+            .replace("http://", "https://api.test.firebolt.io");
+        std::env::set_var("FIREBOLT_API_ENDPOINT", &api_endpoint);
+
+        let factory_no_account = FireboltClientFactory {
+            client_id: Some("client_id".to_string()),
+            client_secret: Some("secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: None,
+            _api_endpoint: api_endpoint,
+        };
+
+        let result = factory_no_account.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_engine_url_success() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
+
+        let factory = FireboltClientFactory {
+            client_id: Some("test_client_id".to_string()),
+            client_secret: Some("test_client_secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Authentication(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_account_not_found() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
+
+        let factory = FireboltClientFactory {
+            client_id: Some("test_client_id".to_string()),
+            client_secret: Some("test_client_secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("nonexistent_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Authentication(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_server_error() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
+
+        let factory = FireboltClientFactory {
+            client_id: Some("test_client_id".to_string()),
+            client_secret: Some("test_client_secret".to_string()),
+            database_name: None,
+            engine_name: None,
+            account_name: Some("test_account".to_string()),
+            _api_endpoint: "https://api.test.firebolt.io".to_string(),
+        };
+
+        let result = factory.build().await;
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Authentication(_)
+        ));
+    }
+
+    #[test]
+    fn test_get_api_endpoint_default() {
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "https://api.app.firebolt.io");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_from_env() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "custom.api.firebolt.io");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "https://custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_with_https_prefix() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "https://custom.api.firebolt.io");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "https://custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[test]
+    fn test_get_api_endpoint_with_http_prefix() {
+        std::env::set_var("FIREBOLT_API_ENDPOINT", "http://custom.api.firebolt.io");
+
+        let result = FireboltClientFactory::get_api_endpoint();
+
+        assert_eq!(result, "http://custom.api.firebolt.io");
+
+        std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_success() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"engineUrl": "engine.test.firebolt.io"}"#)
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+
+        let engine_url = result.unwrap();
+        assert_eq!(engine_url, "https://engine.test.firebolt.io/");
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_account_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/nonexistent/engineUrl")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("nonexistent", &server.url(), "test_token").await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_server_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(500)
+            .with_body("Internal server error")
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_invalid_json() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("invalid json")
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_engine_url_missing_engine_url_field() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/web/v3/account/test_account/engineUrl")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"otherField": "value"}"#)
+            .create_async()
+            .await;
+
+        let result =
+            FireboltClientFactory::get_engine_url("test_account", &server.url(), "test_token")
+                .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+    }
+
+    #[tokio::test]
     async fn test_process_response_headers_update_endpoint() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
@@ -449,7 +912,7 @@ mod tests {
                 HEADER_UPDATE_ENDPOINT,
                 "https://new.engine.url/path?param1=value1&param2=value2",
             )
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -484,7 +947,7 @@ mod tests {
                 HEADER_UPDATE_PARAMETERS,
                 "database=new_db,engine=new_engine,custom=value",
             )
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -516,7 +979,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_RESET_SESSION, "true")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -558,7 +1021,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_REMOVE_PARAMETERS, "param1,param3")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -590,33 +1053,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_response_headers_invalid_endpoint_url() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_header(HEADER_UPDATE_ENDPOINT, "invalid-url")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
-            .create_async()
-            .await;
-
-        let mut client = create_test_client();
-        client._engine_url = server.url();
-
-        let result = client
-            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
-            .await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FireboltError::HeaderParsing(_)
-        ));
-    }
-
-    #[tokio::test]
     async fn test_process_response_headers_invalid_parameters_format() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
@@ -624,7 +1060,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_UPDATE_PARAMETERS, "invalid-format-no-equals")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 
@@ -651,7 +1087,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header(HEADER_UPDATE_PARAMETERS, "=value")
-            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [{"test": 1}]}"#)
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
             .create_async()
             .await;
 

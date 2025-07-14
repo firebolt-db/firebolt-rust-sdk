@@ -36,16 +36,11 @@ pub fn parse_response(body: String) -> Result<ResultSet, FireboltError> {
 
     let rows: Result<Vec<crate::result::Row>, FireboltError> = data
         .iter()
-        .map(|row_obj| {
-            let row_values: Vec<serde_json::Value> = columns
-                .iter()
-                .map(|col| {
-                    row_obj
-                        .get(&col.name)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
-                })
-                .collect();
+        .map(|row_array| {
+            let row_values: Vec<serde_json::Value> = row_array
+                .as_array()
+                .ok_or_else(|| FireboltError::Query("Row data is not an array".to_string()))?
+                .to_vec();
 
             Ok(crate::result::Row::new(row_values))
         })
@@ -72,8 +67,8 @@ mod tests {
                 {"name": "name", "type": "text"}
             ],
             "data": [
-                {"id": 1, "name": "test"},
-                {"id": 2, "name": "example"}
+                [1, "test"],
+                [2, "example"]
             ],
             "rows": 2,
             "statistics": {"elapsed": 0.006947, "rows_read": 2, "bytes_read": 10}
