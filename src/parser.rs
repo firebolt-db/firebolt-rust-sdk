@@ -4,9 +4,9 @@ use crate::types::{Column, Type};
 use regex::Regex;
 
 fn parse_type(type_str: &str) -> Result<(Type, bool, Option<i32>, Option<i32>), FireboltError> {
-    let is_nullable = type_str.starts_with("null::");
+    let is_nullable = type_str.ends_with(" null");
     let clean_type = if is_nullable {
-        &type_str[6..]
+        &type_str[..type_str.len() - 5]
     } else {
         type_str
     };
@@ -184,15 +184,15 @@ mod tests {
     #[test]
     fn test_parse_type_nullable() {
         assert_eq!(
-            parse_type("null::int").unwrap(),
+            parse_type("int null").unwrap(),
             (Type::Int, true, None, None)
         );
         assert_eq!(
-            parse_type("null::text").unwrap(),
+            parse_type("text null").unwrap(),
             (Type::Text, true, None, None)
         );
         assert_eq!(
-            parse_type("null::array(int)").unwrap(),
+            parse_type("array(int) null").unwrap(),
             (Type::Array, true, None, None)
         );
     }
@@ -204,7 +204,7 @@ mod tests {
             (Type::Decimal, false, Some(38), Some(30))
         );
         assert_eq!(
-            parse_type("null::decimal(10, 2)").unwrap(),
+            parse_type("decimal(10, 2) null").unwrap(),
             (Type::Decimal, true, Some(10), Some(2))
         );
     }
@@ -221,7 +221,7 @@ mod tests {
                 {"name": "id", "type": "int"},
                 {"name": "name", "type": "text"},
                 {"name": "price", "type": "decimal(10, 2)"},
-                {"name": "nullable_field", "type": "null::text"}
+                {"name": "nullable_field", "type": "text null"}
             ]
         });
 
