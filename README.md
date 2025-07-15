@@ -93,38 +93,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Working with Tables
-
-```rust
-use firebolt::FireboltClient;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = FireboltClient::builder()
-        .with_credentials("your_client_id".to_string(), "your_client_secret".to_string())
-        .with_account("your_account_name".to_string())
-        .with_database("your_database_name".to_string())
-        .with_engine("your_engine_name".to_string())
-        .build()
-        .await?;
-
-    client.query("CREATE TABLE IF NOT EXISTS users (id INT, name TEXT, active BOOLEAN)").await?;
-
-    client.query("INSERT INTO users VALUES (1, 'Alice', true), (2, 'Bob', false)").await?;
-
-    let result = client.query("SELECT id, name, active FROM users ORDER BY id").await?;
-
-    for row in &result.rows {
-        let id: i32 = row.get("id")?;
-        let name: String = row.get("name")?;
-        let active: bool = row.get("active")?;
-
-        println!("User {}: {} (active: {})", id, name, active);
-    }
-
-    Ok(())
-}
-```
 
 ## Type-Safe Result Parsing
 
@@ -244,15 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Environment Variables
-
-You can configure the API endpoint using environment variables:
-
-```bash
-export FIREBOLT_API_ENDPOINT="api.staging.firebolt.io"
-```
-
-If not set, the SDK defaults to the production endpoint `api.app.firebolt.io`.
 
 ## Troubleshooting
 
@@ -265,15 +224,8 @@ If not set, the SDK defaults to the production endpoint `api.app.firebolt.io`.
 | `Network error: Failed to get engine URL` | Network connectivity issues | Check your internet connection and firewall settings |
 | `Query error: Account 'account_name' not found` | Incorrect account name | Verify the account name matches exactly what's shown in the Firebolt console |
 
-### Best Practices
-
-- Store credentials securely using environment variables or a secrets management system
-- Use connection pooling for applications with multiple concurrent queries
-- Handle errors appropriately and implement retry logic for transient failures
-- Use the builder pattern to configure only the parameters you need
 
 ## Additional Resources
 
-- [Firebolt Rust SDK GitHub Repository](https://github.com/firebolt-db/firebolt-rust-sdk)
 - [Firebolt Documentation](https://docs.firebolt.io/)
 - [Rust Documentation](https://doc.rust-lang.org/)
