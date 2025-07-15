@@ -78,17 +78,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let result = client.query("SELECT 1 as test_column, 'hello' as text_column").await?;
-    
+
     println!("Columns: {}", result.columns.len());
     println!("Rows: {}", result.rows.len());
-    
+
     let row = &result.rows[0];
     let test_value: i32 = row.get("test_column")?;
     let text_value: String = row.get("text_column")?;
-    
+
     println!("test_column: {}", test_value);
     println!("text_column: {}", text_value);
-    
+
     Ok(())
 }
 ```
@@ -109,19 +109,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     client.query("CREATE TABLE IF NOT EXISTS users (id INT, name TEXT, active BOOLEAN)").await?;
-    
+
     client.query("INSERT INTO users VALUES (1, 'Alice', true), (2, 'Bob', false)").await?;
-    
+
     let result = client.query("SELECT id, name, active FROM users ORDER BY id").await?;
-    
+
     for row in &result.rows {
         let id: i32 = row.get("id")?;
         let name: String = row.get("name")?;
         let active: bool = row.get("active")?;
-        
+
         println!("User {}: {} (active: {})", id, name, active);
     }
-    
+
     Ok(())
 }
 ```
@@ -148,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let result = client.query(r#"
-        SELECT 
+        SELECT
             42 as int_col,
             30000000000 as long_col,
             3.14::float4 as float_col,
@@ -158,9 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             true as bool_col,
             [1,2,3] as array_col
     "#).await?;
-    
+
     let row = &result.rows[0];
-    
+
     let int_val: i32 = row.get("int_col")?;
     let long_val: BigInt = row.get("long_col")?;
     let float_val: f32 = row.get("float_col")?;
@@ -169,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let text_val: String = row.get("text_col")?;
     let bool_val: bool = row.get("bool_col")?;
     let array_val: serde_json::Value = row.get("array_col")?;
-    
+
     println!("Integer: {}", int_val);
     println!("Long: {}", long_val);
     println!("Float: {}", float_val);
@@ -178,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Text: {}", text_val);
     println!("Boolean: {}", bool_val);
     println!("Array: {}", array_val);
-    
+
     Ok(())
 }
 ```
@@ -239,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Other error: {}", e);
         }
     }
-    
+
     Ok(())
 }
 ```
