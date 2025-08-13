@@ -8,6 +8,7 @@ on:
 jobs:
   integration-tests:
     uses: ./.github/workflows/integration-tests.yml
+    secrets: inherit
 
   release:
     needs: integration-tests
