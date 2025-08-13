@@ -22,11 +22,19 @@ Add the Firebolt SDK to your `Cargo.toml` dependencies:
 
 ```toml
 [dependencies]
-firebolt = "0.0.1"
+firebolt = ">=0.0.1"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
 ## Connect to Firebolt
+
+The SDK uses the following parameters to connect to Firebolt:
+
+- `client_id`: Client ID of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
+- `client_secret`: Client secret of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
+- `account_name`: The name of your Firebolt [account](https://docs.firebolt.io/guides/managing-your-organization/managing-accounts).
+- `database`: (Optional) The name of the [database](https://docs.firebolt.io/overview/security/rbac/database-permissions) to connect to.
+- `engine`: (Optional) The name of the [engine](https://docs.firebolt.io/overview/security/rbac/engine-permissions) to run SQL queries on.
 
 To establish a connection to a Firebolt database, use the builder pattern with your credentials and database details. The following example shows how to connect to Firebolt:
 
@@ -35,6 +43,7 @@ use firebolt::FireboltClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
     let mut client = FireboltClient::builder()
         .with_credentials("your_client_id".to_string(), "your_client_secret".to_string())
         .with_account("your_account_name".to_string())
@@ -47,16 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-### Connection Parameters
-
-The SDK uses the following parameters to connect to Firebolt:
-
-- `CLIENT_ID`: Client ID of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
-- `client_secret`: Client secret of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
-- `account_name`: The name of your Firebolt [account](https://docs.firebolt.io/guides/managing-your-organization/managing-accounts).
-- `database`: (Optional) The name of the [database](https://docs.firebolt.io/overview/security/rbac/database-permissions) to connect to.
-- `engine`: (Optional) The name of the [engine](https://docs.firebolt.io/overview/security/rbac/engine-permissions) to run SQL queries on.
 
 ## Run Queries
 
