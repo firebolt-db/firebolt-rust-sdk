@@ -22,11 +22,19 @@ Add the Firebolt SDK to your `Cargo.toml` dependencies:
 
 ```toml
 [dependencies]
-firebolt = "0.0.1"
+firebolt = ">=0.0.1"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
 ## Connect to Firebolt
+
+The SDK uses the following parameters to connect to Firebolt:
+
+- `client_id`: Client ID of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
+- `client_secret`: Client secret of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
+- `account_name`: The name of your Firebolt [account](https://docs.firebolt.io/guides/managing-your-organization/managing-accounts).
+- `database`: (Optional) The name of the [database](https://docs.firebolt.io/overview/security/rbac/database-permissions) to connect to.
+- `engine`: (Optional) The name of the [engine](https://docs.firebolt.io/overview/security/rbac/engine-permissions) to run SQL queries on.
 
 To establish a connection to a Firebolt database, use the builder pattern with your credentials and database details. The following example shows how to connect to Firebolt:
 
@@ -35,6 +43,7 @@ use firebolt::FireboltClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
     let mut client = FireboltClient::builder()
         .with_credentials("your_client_id".to_string(), "your_client_secret".to_string())
         .with_account("your_account_name".to_string())
@@ -48,16 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Connection Parameters
-
-The SDK uses the following parameters to connect to Firebolt:
-
-- `client_id`: Client ID of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
-- `client_secret`: Client secret of your [service account](https://docs.firebolt.io/guides/managing-your-organization/service-accounts).
-- `account_name`: The name of your Firebolt [account](https://docs.firebolt.io/guides/managing-your-organization/managing-accounts).
-- `database`: (Optional) The name of the [database](https://docs.firebolt.io/overview/security/rbac/database-permissions) to connect to.
-- `engine`: (Optional) The name of the [engine](https://docs.firebolt.io/overview/security/rbac/engine-permissions) to run SQL queries on.
-
 ## Run Queries
 
 Once connected, you can execute SQL queries using the `query` method. The SDK returns results with type-safe parsing for all Firebolt data types.
@@ -69,25 +68,40 @@ use firebolt::FireboltClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    const CLIENT_ID: &str = "your_client_id";
+    const CLIENT_SECRET: &str = "your_client_secret";
+    const ACCOUNT_NAME: &str = "your_account_name";
+    const DATABASE_NAME: &str = "your_database_name";
+    const ENGINE_NAME: &str = "your_engine_name";
+
     let mut client = FireboltClient::builder()
-        .with_credentials("your_client_id".to_string(), "your_client_secret".to_string())
-        .with_account("your_account_name".to_string())
-        .with_database("your_database_name".to_string())
-        .with_engine("your_engine_name".to_string())
+        .with_credentials(CLIENT_ID.to_string(), CLIENT_SECRET.to_string())
+        .with_account(ACCOUNT_NAME.to_string())
+        .with_database(DATABASE_NAME.to_string())
+        .with_engine(ENGINE_NAME.to_string())
         .build()
         .await?;
 
-    let result = client.query("SELECT 1 as test_column, 'hello' as text_column").await?;
+    let result = client.query("SELECT 1 as number_value, 'hello' as text_value").await?;
 
     println!("Columns: {}", result.columns.len());
     println!("Rows: {}", result.rows.len());
 
     let row = &result.rows[0];
-    let test_value: i32 = row.get("test_column")?;
-    let text_value: String = row.get("text_column")?;
 
-    println!("test_column: {}", test_value);
-    println!("text_column: {}", text_value);
+    // Accessing by name
+    let num_value: i32 = row.get("number_value")?;
+    let text_value: String = row.get("text_value")?;
+
+    println!("number: {}", num_value);
+    println!("text: {}", text_value);
+
+    // Accessing by index
+    let first_column: i32 = row.get(0)?;
+    let second_column: String = row.get(1)?;
+
+    println!("First column by index: {}", first_column);
+    println!("Second column by index: {}", second_column);
 
     Ok(())
 }
@@ -107,11 +121,17 @@ use rust_decimal::Decimal;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    const CLIENT_ID: &str = "your_client_id";
+    const CLIENT_SECRET: &str = "your_client_secret";
+    const ACCOUNT_NAME: &str = "your_account_name";
+    const DATABASE_NAME: &str = "your_database_name";
+    const ENGINE_NAME: &str = "your_engine_name";
+
     let mut client = FireboltClient::builder()
-        .with_credentials("your_client_id".to_string(), "your_client_secret".to_string())
-        .with_account("your_account_name".to_string())
-        .with_database("your_database_name".to_string())
-        .with_engine("your_engine_name".to_string())
+        .with_credentials(CLIENT_ID.to_string(), CLIENT_SECRET.to_string())
+        .with_account(ACCOUNT_NAME.to_string())
+        .with_database(DATABASE_NAME.to_string())
+        .with_engine(ENGINE_NAME.to_string())
         .build()
         .await?;
 
@@ -124,7 +144,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             '123.456'::decimal(10,3) as decimal_col,
             'hello world' as text_col,
             true as bool_col,
-            [1,2,3] as array_col
+            [1,2,3] as array_col,
+            NULL as nullable_col
     "#).await?;
 
     let row = &result.rows[0];
@@ -137,6 +158,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let text_val: String = row.get("text_col")?;
     let bool_val: bool = row.get("bool_col")?;
     let array_val: serde_json::Value = row.get("array_col")?;
+    // For nullable types use Option<T>
+    let nullable_val: Option<i32> = row.get("nullable_col")?;
 
     println!("Integer: {}", int_val);
     println!("Long: {}", long_val);
@@ -146,30 +169,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Text: {}", text_val);
     println!("Boolean: {}", bool_val);
     println!("Array: {}", array_val);
+    // Handle nullable value
+    match nullable_val {
+        Some(value) => println!("Nullable Value: {}", value),
+        None => println!("Nullable Value is NULL"),
+    }
 
     Ok(())
 }
-```
-
-### Nullable Types
-
-For nullable columns, use `Option<T>` types:
-
-```rust
-let nullable_int: Option<i32> = row.get("nullable_column")?;
-match nullable_int {
-    Some(value) => println!("Value: {}", value),
-    None => println!("Value is NULL"),
-}
-```
-
-### Accessing by Index
-
-You can also access columns by their index:
-
-```rust
-let first_column: String = row.get(0)?;
-let second_column: i32 = row.get(1)?;
 ```
 
 ## Error Handling
@@ -217,12 +224,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Common Connection Issues
 
-| Error | Likely Cause | Solution |
-|-------|--------------|----------|
-| `Authentication error: Invalid credentials` | Incorrect client ID or secret | Verify your service account credentials in the Firebolt console |
-| `Configuration error: client_id is required` | Missing required parameter | Ensure all required parameters are provided to the builder |
-| `Network error: Failed to get engine URL` | Network connectivity issues | Check your internet connection and firewall settings |
-| `Query error: Account 'account_name' not found` | Incorrect account name | Verify the account name matches exactly what's shown in the Firebolt console |
+| Error | Likely Cause                  | Solution                                                                       |
+|-------|-------------------------------|--------------------------------------------------------------------------------|
+| `Authentication error: Invalid credentials` | Incorrect client ID or secret | Verify your service account credentials in the Firebolt console                |
+| `Configuration error: CLIENT_ID is required` | Missing required parameter    | Ensure all required parameters are provided to the builder                     |
+| `Network error: Failed to get engine URL` | Network connectivity issues   | Check your internet connection and firewall settings                           |
+| `Query error: Line 1, Column 15: relation \"non_existent_table\" does not exist` | Invalid SQL query             | Verify your SQL query has correct syntax and uses valid table and column names |
 
 
 ## Additional Resources
