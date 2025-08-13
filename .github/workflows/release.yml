@@ -1,9 +1,14 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      pre-release-tag:
+        required: false
+        description: 'Tag for pre-release (optional)'
+      major-release:
+        required: false
+        description: 'Trigger a major release (optional). Leave empty for regular release.'
 
 jobs:
   integration-tests:
@@ -18,9 +23,57 @@ jobs:
   release:
     needs: integration-tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Setup git config
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "<>"
+        shell: bash
+
+      - name: Get previous tag and changes
+        id: git_info
+        run: |
+          OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
+          echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
+          CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
+          echo "changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGE_LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Previous tag: $OLD_TAG"
+        shell: bash
+
+      - name: Generate new version tag
+        id: tag_generation
+        uses: firebolt-db/action-generate-version@main
+        with:
+          changes: ${{ steps.git_info.outputs.changes }}
+          old-tag: ${{ steps.git_info.outputs.old_tag }}
+          prerelease-tag: ${{ inputs.pre-release-tag }}
+          major-release: ${{ inputs.major-release }}
+
+      - name: Version bump
+        run: |
+          NEW_VERSION=$(echo "${{ steps.tag_generation.outputs.new_tag }}" | cut -c 2-)
+          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" Cargo.toml
+          git add Cargo.toml
+          git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new_tag }}"
+          git push origin main
+        shell: bash
+
+      - name: Publish tag on github
+        run: |
+          git tag ${{ steps.tag_generation.outputs.new_tag }}
+          git push origin ${{ steps.tag_generation.outputs.new_tag }}
+        shell: bash
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -59,11 +112,8 @@ jobs:
         run: cargo publish
 
       - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
+          tag_name: ${{ steps.tag_generation.outputs.new_tag }}
+          generate_release_notes: true
+          prerelease: ${{ inputs.pre-release-tag != '' }}
