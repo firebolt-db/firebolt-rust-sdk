@@ -1,0 +1,48 @@
+name: 'Version Generation'
+description: 'Generate semantic version based on conventional commits'
+inputs:
+  old-version:
+    description: 'Current version'
+    required: true
+  prerelease-tag:
+    description: 'Prerelease tag (optional)'
+    required: false
+    default: ''
+  major-release:
+    description: 'Force major release (optional)'
+    required: false
+    default: ''
+outputs:
+  new-version:
+    description: 'Generated version'
+    value: ${{ steps.generate.outputs.new_version }}
+  new-tag:
+    description: 'Generated tag with v prefix'
+    value: ${{ steps.generate.outputs.new_tag }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install semver
+    
+    - name: Generate version
+      id: generate
+      shell: bash
+      run: |
+        OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        OLD_VERSION=$(echo $OLD_TAG | cut -c 2-)
+        echo "Old tag was ${OLD_TAG}"
+        CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
+        NEW_VERSION=$(python3 ${{ github.action_path }}/../../scripts/generate_version_tag.py "${CHANGE_LOG}" $OLD_VERSION --prerelease_tag "${{ inputs.prerelease-tag }}" --major_release "${{ inputs.major-release }}")
+        NEW_TAG="v"$NEW_VERSION
+        echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "Generated version: $NEW_VERSION (tag: $NEW_TAG)"
