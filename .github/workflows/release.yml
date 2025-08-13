@@ -8,12 +8,6 @@ on:
 jobs:
   integration-tests:
     uses: ./.github/workflows/integration-tests.yml
-    secrets:
-      FIREBOLT_CLIENT_ID: ${{ secrets.FIREBOLT_CLIENT_ID_STG_NEW_IDN }}
-      FIREBOLT_CLIENT_SECRET: ${{ secrets.FIREBOLT_CLIENT_SECRET_STG_NEW_IDN }}
-      FIREBOLT_DATABASE: ${{ secrets.FIREBOLT_DATABASE }}
-      FIREBOLT_ENGINE: ${{ secrets.FIREBOLT_ENGINE }}
-      FIREBOLT_ACCOUNT: ${{ secrets.FIREBOLT_ACCOUNT }}
 
   release:
     needs: integration-tests
