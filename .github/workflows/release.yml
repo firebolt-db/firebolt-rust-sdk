@@ -39,16 +39,31 @@ jobs:
           git config user.email "<>"
         shell: bash
 
+      - name: Get previous tag and changes
+        id: git_info
+        run: |
+          OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
+          echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
+          CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
+          echo "changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGE_LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Previous tag: $OLD_TAG"
+        shell: bash
+
       - name: Generate new version tag
         id: tag_generation
-        uses: ./.github/actions/version-generation
+        uses: firebolt-db/action-generate-version@main
         with:
+          changes: ${{ steps.git_info.outputs.changes }}
+          old-tag: ${{ steps.git_info.outputs.old_tag }}
           prerelease-tag: ${{ inputs.pre-release-tag }}
           major-release: ${{ inputs.major-release }}
 
       - name: Version bump
         run: |
-          sed -i "s/^version = .*/version = \"${{ steps.tag_generation.outputs.new_version }}\"/" Cargo.toml
+          NEW_VERSION=$(echo "${{ steps.tag_generation.outputs.new_tag }}" | cut -c 2-)
+          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" Cargo.toml
           git add Cargo.toml
           git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new_tag }}"
           git push origin main
