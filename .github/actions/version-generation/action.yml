@@ -33,10 +33,14 @@ runs:
         python -m pip install --upgrade pip
         pip install semver
 
-    - name: Download version generation script
-      shell: bash
-      run: |
-        curl -o generate_version_tag.py https://raw.githubusercontent.com/firebolt-db/action-python-release/main/scripts/generate_version_tag.py
+    - name: Checkout version generation script
+      uses: actions/checkout@v4
+      with:
+        repository: firebolt-db/action-python-release
+        sparse-checkout: |
+          scripts/generate_version_tag.py
+        sparse-checkout-cone-mode: false
+        path: release_action
 
     - name: Generate version
       id: generate
@@ -46,7 +50,7 @@ runs:
         OLD_VERSION=$(echo $OLD_TAG | cut -c 2-)
         echo "Old tag was ${OLD_TAG}"
         CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
-        NEW_VERSION=$(python3 generate_version_tag.py "${CHANGE_LOG}" $OLD_VERSION --prerelease_tag "${{ inputs.prerelease-tag }}" --major_release "${{ inputs.major-release }}")
+        NEW_VERSION=$(python3 release_action/scripts/generate_version_tag.py "${CHANGE_LOG}" $OLD_VERSION --prerelease_tag "${{ inputs.prerelease-tag }}" --major_release "${{ inputs.major-release }}")
         NEW_TAG="v"$NEW_VERSION
         echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
         echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
