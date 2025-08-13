@@ -8,9 +8,11 @@ on:
         required: true
       FIREBOLT_CLIENT_SECRET_STG_NEW_IDN:
         required: true
-    vars:
-        FIREBOLT_ACCOUNT:
-            required: true
+    inputs:
+      firebolt-account:
+        required: true
+        default: ${{ vars.FIREBOLT_ACCOUNT }}
+        type: string
 
 jobs:
   integration-tests:
