@@ -4,16 +4,13 @@ on:
   workflow_dispatch:
   workflow_call:
     secrets:
-      FIREBOLT_CLIENT_ID:
+      FIREBOLT_CLIENT_ID_STG_NEW_IDN:
         required: true
-      FIREBOLT_CLIENT_SECRET:
+      FIREBOLT_CLIENT_SECRET_STG_NEW_IDN:
         required: true
-      FIREBOLT_DATABASE:
-        required: true
-      FIREBOLT_ENGINE:
-        required: true
-      FIREBOLT_ACCOUNT:
-        required: true
+    vars:
+        FIREBOLT_ACCOUNT:
+            required: true
 
 jobs:
   integration-tests:
