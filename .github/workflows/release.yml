@@ -43,7 +43,6 @@ jobs:
         id: tag_generation
         uses: ./.github/actions/version-generation
         with:
-          old-version: "placeholder"
           prerelease-tag: ${{ inputs.pre-release-tag }}
           major-release: ${{ inputs.major-release }}
 

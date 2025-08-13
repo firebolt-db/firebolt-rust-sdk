@@ -1,9 +1,6 @@
 name: 'Version Generation'
 description: 'Generate semantic version based on conventional commits'
 inputs:
-  old-version:
-    description: 'Current version'
-    required: true
   prerelease-tag:
     description: 'Prerelease tag (optional)'
     required: false
@@ -46,7 +43,7 @@ runs:
       id: generate
       shell: bash
       run: |
-        OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
         OLD_VERSION=$(echo $OLD_TAG | cut -c 2-)
         echo "Old tag was ${OLD_TAG}"
         CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
