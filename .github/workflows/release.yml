@@ -57,17 +57,17 @@ jobs:
 
       - name: Version bump
         run: |
-          NEW_VERSION=$(echo "${{ steps.tag_generation.outputs.new_tag }}" | cut -c 2-)
+          NEW_VERSION=$(echo "${{ steps.tag_generation.outputs.new-tag }}" | cut -c 2-)
           sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" Cargo.toml
           git add Cargo.toml
-          git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new_tag }}"
+          git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new-tag }}"
           git push origin main
         shell: bash
 
       - name: Publish tag on github
         run: |
-          git tag ${{ steps.tag_generation.outputs.new_tag }}
-          git push origin ${{ steps.tag_generation.outputs.new_tag }}
+          git tag ${{ steps.tag_generation.outputs.new-tag }}
+          git push origin ${{ steps.tag_generation.outputs.new-tag }}
         shell: bash
 
       - name: Set up Rust
@@ -109,6 +109,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.tag_generation.outputs.new_tag }}
+          tag_name: ${{ steps.tag_generation.outputs.new-tag }}
           generate_release_notes: true
           prerelease: ${{ inputs.pre-release-tag != '' }}
