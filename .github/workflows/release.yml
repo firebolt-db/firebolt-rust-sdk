@@ -57,7 +57,7 @@ jobs:
 
       - name: Version bump
         run: |
-          NEW_VERSION=$(echo "${{ steps.tag_generation.outputs.new-tag }}" | cut -c 2-)
+          NEW_VERSION=$(echo "${{ steps.tag_generation.outputs.new-tag }}" | cut -c 1-)
           sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" Cargo.toml
           git add Cargo.toml
           git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new-tag }}"
