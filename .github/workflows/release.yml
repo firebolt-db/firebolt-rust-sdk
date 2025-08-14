@@ -37,7 +37,7 @@ jobs:
       - name: Get previous tag and changes
         id: git_info
         run: |
-          OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
+          OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1" | cut -c 1-)
           echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
           CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
           echo "changes<<EOF" >> $GITHUB_OUTPUT
