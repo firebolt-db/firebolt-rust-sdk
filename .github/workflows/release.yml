@@ -37,9 +37,9 @@ jobs:
       - name: Get previous tag and changes
         id: git_info
         run: |
-          OLD_TAG=$($(echo git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1") | cut -c 2-)
-          echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
+          OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
           CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
+          echo "old_version=$(echo $OLD_TAG | cut -c 2-)" >> $GITHUB_OUTPUT
           echo "changes<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGE_LOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -51,7 +51,7 @@ jobs:
         uses: firebolt-db/action-generate-version@main
         with:
           changes: ${{ steps.git_info.outputs.changes }}
-          old-tag: ${{ steps.git_info.outputs.old_tag }}
+          old-tag: ${{ steps.git_info.outputs.old_version }}
           prerelease-tag: ${{ inputs.pre-release-tag }}
           major-release: ${{ inputs.major-release }}
 
