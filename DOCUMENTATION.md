@@ -166,7 +166,7 @@ use rust_decimal::Decimal;
 let mut client = /* ... initialize client ... */;
 
 let result = client.query(r#"
-    SELECT 
+    SELECT
         42 as int_col,
         30000000000 as bigint_col,
         '123.456'::decimal(10,3) as decimal_col,
@@ -352,16 +352,16 @@ loop {
         "SELECT * FROM large_table LIMIT {} OFFSET {}",
         page_size, offset
     )).await?;
-    
+
     if result.rows.is_empty() {
         break;
     }
-    
+
     // Process batch
     for row in &result.rows {
         // Process row
     }
-    
+
     offset += page_size;
 }
 ```
@@ -400,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Insert data
     client.query(r#"
-        INSERT INTO users VALUES 
+        INSERT INTO users VALUES
         (1, 'Alice', 'alice@example.com', '2023-01-01 10:00:00'),
         (2, 'Bob', 'bob@example.com', '2023-01-02 11:00:00')
     "#).await?;
@@ -413,7 +413,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let id: i32 = row.get("id")?;
         let name: String = row.get("name")?;
         let email: String = row.get("email")?;
-        
+
         println!("User {}: {} ({})", id, name, email);
     }
 
@@ -430,7 +430,7 @@ use rust_decimal::Decimal;
 
 async fn showcase_data_types(client: &mut FireboltClient) -> Result<(), Box<dyn std::error::Error>> {
     let result = client.query(r#"
-        SELECT 
+        SELECT
             42 as int_value,
             30000000000 as bigint_value,
             3.14159::float4 as float_value,
@@ -498,7 +498,7 @@ async fn robust_query_with_retry(
     max_retries: u32
 ) -> Result<firebolt::ResultSet, FireboltError> {
     let mut attempts = 0;
-    
+
     loop {
         match client.query(sql).await {
             Ok(result) => return Ok(result),
