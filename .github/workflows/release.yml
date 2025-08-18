@@ -59,17 +59,8 @@ jobs:
         run: |
           NEW_VERSION=${{ steps.tag_generation.outputs.new-tag }}
           sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" Cargo.toml
-          git add Cargo.toml
-          git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new-tag }}"
-          git push origin main
         shell: bash
-
-      - name: Publish tag on github
-        run: |
-          git tag v${{ steps.tag_generation.outputs.new-tag }}
-          git push origin v${{ steps.tag_generation.outputs.new-tag }}
-        shell: bash
-
+        # We need to build the project to ensure that the Cargo.lock file is updated before committing it.
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -99,6 +90,20 @@ jobs:
 
       - name: Run tests
         run: cargo test --lib --verbose
+
+      - name: Commit version bump
+        run: |
+          git add Cargo.toml
+          git add Cargo.lock
+          git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new-tag }}"
+          git push origin main
+        shell: bash
+
+      - name: Publish tag on github
+        run: |
+          git tag v${{ steps.tag_generation.outputs.new-tag }}
+          git push origin v${{ steps.tag_generation.outputs.new-tag }}
+        shell: bash
 
       - name: Login to crates.io
         run: cargo login ${{ secrets.CRATES_IO_TOKEN }}
