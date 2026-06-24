@@ -122,7 +122,7 @@ jobs:
 
       - name: Start Firebolt
         run: |
-          mkdir -p -m 777 firebolt-data
+          mkdir -p -m 777 "$RUNNER_TEMP/firebolt-data"
           docker run \
             --detach \
             --user firebolt \
@@ -130,7 +130,7 @@ jobs:
             --rm \
             --ulimit memlock=8589934592:8589934592 \
             --security-opt seccomp=unconfined \
-            -v "$(pwd)/firebolt-data:/var/lib/firebolt" \
+            -v "$RUNNER_TEMP/firebolt-data:/var/lib/firebolt" \
             -p 3473:3473 \
             ghcr.io/firebolt-db/engine:dev
 
