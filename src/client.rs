@@ -1418,7 +1418,7 @@ mod tests {
             .await;
 
         let query_mock = server
-            .mock("POST", "/query")
+            .mock("POST", "/query/")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("database".into(), "test_db".into()),
                 mockito::Matcher::UrlEncoded("engine".into(), "test_engine".into()),
@@ -1468,6 +1468,10 @@ mod tests {
 
         let query_mock = server
             .mock("POST", "/")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "output_format".into(),
+                "JSON_Compact".into(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[42]]}"#)
@@ -1519,7 +1523,11 @@ mod tests {
             .await;
 
         let query_mock = server
-            .mock("POST", "/query")
+            .mock("POST", "/query/")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "output_format".into(),
+                "JSON_Compact".into(),
+            ))
             .match_header("Authorization", "Bearer discovered_token")
             .with_status(200)
             .with_header("content-type", "application/json")
