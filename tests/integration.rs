@@ -4,9 +4,19 @@ use common::{validate_environment, TestConfig};
 use firebolt::FireboltClient;
 
 #[allow(dead_code)]
-fn setup() -> Result<TestConfig, String> {
-    validate_environment()?;
-    TestConfig::from_env()
+fn setup() -> Option<TestConfig> {
+    if let Err(e) = validate_environment() {
+        println!("Skipping integration test due to setup failure: {e}");
+        return None;
+    }
+
+    match TestConfig::from_env() {
+        Ok(config) => Some(config),
+        Err(e) => {
+            println!("Skipping integration test due to setup failure: {e}");
+            None
+        }
+    }
 }
 
 async fn create_client_from_config(
@@ -25,7 +35,9 @@ async fn create_client_from_config(
 
 #[tokio::test]
 async fn test_use_engine_functionality() -> Result<(), Box<dyn std::error::Error>> {
-    let config = setup()?;
+    let Some(config) = setup() else {
+        return Ok(());
+    };
     let mut client = create_client_from_config(&config).await?;
 
     let current_engine_result = client.query("SELECT CURRENT_ENGINE()").await?;
@@ -77,7 +89,9 @@ async fn test_use_engine_functionality() -> Result<(), Box<dyn std::error::Error
 
 #[tokio::test]
 async fn test_use_database_functionality() -> Result<(), Box<dyn std::error::Error>> {
-    let config = setup()?;
+    let Some(config) = setup() else {
+        return Ok(());
+    };
     let mut client = create_client_from_config(&config).await?;
 
     let current_database_result = client.query("SELECT CURRENT_DATABASE()").await?;
@@ -130,7 +144,9 @@ async fn test_use_database_functionality() -> Result<(), Box<dyn std::error::Err
 
 #[tokio::test]
 async fn test_all_data_types_parsing() -> Result<(), Box<dyn std::error::Error>> {
-    let config = setup()?;
+    let Some(config) = setup() else {
+        return Ok(());
+    };
     let mut client = create_client_from_config(&config).await?;
 
     let query = r#"
