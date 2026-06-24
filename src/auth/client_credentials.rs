@@ -24,17 +24,41 @@ pub async fn authenticate(
 ) -> Result<(String, u64), String> {
     let auth_url = validate_and_transform_endpoint(&api_endpoint)?;
 
+    authenticate_with_endpoint(client_id, client_secret, auth_url, None).await
+}
+
+pub async fn authenticate_with_endpoint(
+    client_id: String,
+    client_secret: String,
+    token_endpoint: String,
+    audience: Option<String>,
+) -> Result<(String, u64), String> {
+    authenticate_with_client(
+        Client::new(),
+        client_id,
+        client_secret,
+        token_endpoint,
+        audience,
+    )
+    .await
+}
+
+pub(crate) async fn authenticate_with_client(
+    client: Client,
+    client_id: String,
+    client_secret: String,
+    token_endpoint: String,
+    audience: Option<String>,
+) -> Result<(String, u64), String> {
     let auth_request = AuthRequest {
         client_id,
         client_secret,
         grant_type: "client_credentials".to_string(),
-        audience: "https://api.firebolt.io".to_string(),
+        audience: audience.unwrap_or_else(|| "https://api.firebolt.io".to_string()),
     };
 
-    let client = Client::new();
-
     let response = client
-        .post(&auth_url)
+        .post(&token_endpoint)
         .header("User-Agent", user_agent())
         .json(&auth_request)
         .send()

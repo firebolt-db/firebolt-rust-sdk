@@ -1,5 +1,6 @@
 use crate::error::FireboltError;
 use crate::result::ResultSet;
+use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;
 
@@ -7,6 +8,37 @@ const HEADER_UPDATE_ENDPOINT: &str = "Firebolt-Update-Endpoint";
 const HEADER_UPDATE_PARAMETERS: &str = "Firebolt-Update-Parameters";
 const HEADER_RESET_SESSION: &str = "Firebolt-Reset-Session";
 const HEADER_REMOVE_PARAMETERS: &str = "Firebolt-Remove-Parameters";
+const DEFAULT_AUTH_AUDIENCE: &str = "https://api.firebolt.io";
+const DISCOVERY_PATH: &str = "/.well-known/firebolt";
+const PARAM_URL: &str = "url";
+const PARAM_SSL_MODE: &str = "ssl_mode";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SslMode {
+    Strict,
+    None,
+}
+
+impl SslMode {
+    fn parse(value: &str) -> Result<Self, FireboltError> {
+        match value {
+            "strict" => Ok(Self::Strict),
+            "none" => Ok(Self::None),
+            _ => Err(FireboltError::Configuration(format!(
+                "Invalid ssl_mode '{value}'. Expected 'strict' or 'none'"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveryDocument {
+    engine_url: String,
+    token_endpoint: Option<String>,
+    auth_audience: Option<String>,
+    api_endpoint: Option<String>,
+    auth_required: bool,
+}
 
 #[derive(Debug)]
 pub struct FireboltClient {
@@ -16,6 +48,9 @@ pub struct FireboltClient {
     _parameters: HashMap<String, String>,
     _engine_url: String,
     _api_endpoint: String,
+    _token_endpoint: Option<String>,
+    _auth_audience: Option<String>,
+    _ssl_mode: SslMode,
 }
 
 impl FireboltClient {
@@ -36,33 +71,33 @@ impl FireboltClient {
         params: &HashMap<String, String>,
         should_retry: bool,
     ) -> Result<ResultSet, FireboltError> {
-        let client = reqwest::Client::new();
-        let token = &self._token;
-
-        let response = client
+        let client = Self::http_client(self._ssl_mode)?;
+        let mut request = client
             .post(url)
             .query(params)
-            .header("Authorization", format!("Bearer {token}"))
             .header("User-Agent", crate::version::user_agent())
             .header(
                 "Firebolt-Protocol-Version",
                 crate::version::PROTOCOL_VERSION,
             )
-            .body(sql.to_string())
+            .body(sql.to_string());
+
+        if !self._token.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self._token));
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| FireboltError::Network(format!("Request failed: {e}")))?;
 
         let status = response.status();
 
-        if status == 401 && should_retry {
-            let (new_token, _expiration) = crate::auth::authenticate(
-                self.client_id().to_string(),
-                self.client_secret().to_string(),
-                self.api_endpoint().to_string(),
-            )
-            .await
-            .map_err(|e| FireboltError::Authentication(format!("Token refresh failed: {e}")))?;
+        if status == 401 && should_retry && self.can_refresh_token() {
+            let new_token = self
+                .refresh_token()
+                .await
+                .map_err(|e| FireboltError::Authentication(format!("Token refresh failed: {e}")))?;
 
             self.set_token(new_token);
             Box::pin(self.execute_query_request(url, sql, params, false)).await
@@ -116,6 +151,46 @@ impl FireboltClient {
 
     pub fn builder() -> FireboltClientFactory {
         FireboltClientFactory::new()
+    }
+
+    fn http_client(ssl_mode: SslMode) -> Result<reqwest::Client, FireboltError> {
+        let mut builder = reqwest::Client::builder();
+
+        if ssl_mode == SslMode::None {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        builder
+            .build()
+            .map_err(|e| FireboltError::Configuration(format!("Failed to build HTTP client: {e}")))
+    }
+
+    fn can_refresh_token(&self) -> bool {
+        !self._client_id.is_empty()
+            && !self._client_secret.is_empty()
+            && (self._token_endpoint.is_some() || !self._api_endpoint.is_empty())
+    }
+
+    async fn refresh_token(&self) -> Result<String, String> {
+        let (token, _expiration) = if let Some(token_endpoint) = &self._token_endpoint {
+            crate::auth::authenticate_with_client(
+                Self::http_client(self._ssl_mode).map_err(|e| e.to_string())?,
+                self.client_id().to_string(),
+                self.client_secret().to_string(),
+                token_endpoint.clone(),
+                self._auth_audience.clone(),
+            )
+            .await?
+        } else {
+            crate::auth::authenticate(
+                self.client_id().to_string(),
+                self.client_secret().to_string(),
+                self.api_endpoint().to_string(),
+            )
+            .await?
+        };
+
+        Ok(token)
     }
 
     fn process_response_headers(
@@ -219,6 +294,9 @@ pub struct FireboltClientFactory {
     database_name: Option<String>,
     engine_name: Option<String>,
     account_name: Option<String>,
+    connection_url: Option<String>,
+    ssl_mode: SslMode,
+    additional_parameters: HashMap<String, String>,
     _api_endpoint: String,
 }
 
@@ -230,6 +308,9 @@ impl FireboltClientFactory {
             database_name: None,
             engine_name: None,
             account_name: None,
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: "https://api.firebolt.io".to_string(),
         }
     }
@@ -240,6 +321,107 @@ impl FireboltClientFactory {
         } else {
             format!("https://{url}")
         }
+    }
+
+    fn fix_connection_url(url: &str) -> String {
+        if url.starts_with("https://") || url.starts_with("http://") {
+            url.to_string()
+        } else if url.starts_with("localhost")
+            || url.starts_with("127.0.0.1")
+            || url.starts_with("[::1]")
+        {
+            format!("http://{url}")
+        } else {
+            format!("https://{url}")
+        }
+    }
+
+    fn canonical_parameter_key(key: &str) -> &str {
+        match key {
+            "account" | "account_name" => "account_name",
+            "database" | "database_name" => "database",
+            "engine" | "engine_name" => "engine",
+            "client_id" | "client_secret" | PARAM_URL | PARAM_SSL_MODE => key,
+            _ => key,
+        }
+    }
+
+    fn is_control_parameter(key: &str) -> bool {
+        matches!(
+            key,
+            "client_id" | "client_secret" | "account_name" | PARAM_URL | PARAM_SSL_MODE
+        )
+    }
+
+    fn normalize_engine_url(url: &str) -> Result<String, FireboltError> {
+        let url = Url::parse(Self::fix_connection_url(url).as_str())
+            .map_err(|e| FireboltError::Configuration(format!("Invalid connection url: {e}")))?;
+
+        Ok(url.to_string())
+    }
+
+    fn discovery_url(connection_url: &str) -> Result<String, FireboltError> {
+        let mut url = Url::parse(connection_url)
+            .map_err(|e| FireboltError::Configuration(format!("Invalid connection url: {e}")))?;
+        url.set_path(DISCOVERY_PATH);
+        url.set_query(None);
+        Ok(url.to_string())
+    }
+
+    fn resolve_discovery_url(
+        base_url: &str,
+        discovered_url: &str,
+    ) -> Result<String, FireboltError> {
+        let base = Url::parse(base_url)
+            .map_err(|e| FireboltError::Configuration(format!("Invalid base url: {e}")))?;
+        let resolved = base
+            .join(discovered_url)
+            .map_err(|e| FireboltError::Configuration(format!("Invalid discovered url: {e}")))?;
+        Ok(resolved.to_string())
+    }
+
+    fn extract_string<'a>(json: &'a Value, paths: &[&[&str]]) -> Option<&'a str> {
+        for path in paths {
+            let mut current = json;
+            let mut found = true;
+            for key in *path {
+                if let Some(next) = current.get(*key) {
+                    current = next;
+                } else {
+                    found = false;
+                    break;
+                }
+            }
+            if found {
+                if let Some(value) = current.as_str() {
+                    return Some(value);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_bool(json: &Value, paths: &[&[&str]]) -> Option<bool> {
+        for path in paths {
+            let mut current = json;
+            let mut found = true;
+            for key in *path {
+                if let Some(next) = current.get(*key) {
+                    current = next;
+                } else {
+                    found = false;
+                    break;
+                }
+            }
+            if found {
+                if let Some(value) = current.as_bool() {
+                    return Some(value);
+                }
+            }
+        }
+
+        None
     }
 
     fn get_api_endpoint() -> String {
@@ -299,6 +481,147 @@ impl FireboltClientFactory {
         }
     }
 
+    fn parse_discovery_document(
+        connection_url: &str,
+        json: &Value,
+    ) -> Result<DiscoveryDocument, FireboltError> {
+        let discovered_engine_url = Self::extract_string(
+            json,
+            &[
+                &["engine_url"],
+                &["engineUrl"],
+                &["query_url"],
+                &["queryUrl"],
+                &["query_endpoint"],
+                &["queryEndpoint"],
+                &["endpoint"],
+                &["url"],
+                &["endpoints", "query"],
+                &["endpoints", "sql"],
+                &["query", "url"],
+                &["query", "endpoint"],
+                &["sql", "url"],
+                &["sql", "endpoint"],
+            ],
+        );
+
+        let engine_url = match discovered_engine_url {
+            Some(url) => Self::resolve_discovery_url(connection_url, url)?,
+            None => connection_url.to_string(),
+        };
+
+        let token_endpoint = Self::extract_string(
+            json,
+            &[
+                &["token_endpoint"],
+                &["tokenEndpoint"],
+                &["auth", "token_endpoint"],
+                &["auth", "tokenEndpoint"],
+                &["authentication", "token_endpoint"],
+                &["authentication", "tokenEndpoint"],
+                &["oauth", "token_endpoint"],
+                &["oauth", "tokenEndpoint"],
+            ],
+        )
+        .map(|url| Self::resolve_discovery_url(connection_url, url))
+        .transpose()?;
+
+        let auth_type = Self::extract_string(
+            json,
+            &[
+                &["auth", "type"],
+                &["authentication", "type"],
+                &["auth_type"],
+                &["authType"],
+            ],
+        );
+        let auth_required = Self::extract_bool(
+            json,
+            &[
+                &["auth_required"],
+                &["authRequired"],
+                &["auth", "required"],
+                &["authentication", "required"],
+            ],
+        )
+        .unwrap_or_else(|| {
+            token_endpoint.is_some() || auth_type.is_some_and(|value| value != "none")
+        });
+
+        let auth_audience = Self::extract_string(
+            json,
+            &[
+                &["audience"],
+                &["auth", "audience"],
+                &["authentication", "audience"],
+                &["oauth", "audience"],
+            ],
+        )
+        .map(ToString::to_string);
+
+        let api_endpoint = Self::extract_string(
+            json,
+            &[
+                &["api_endpoint"],
+                &["apiEndpoint"],
+                &["auth", "api_endpoint"],
+                &["auth", "apiEndpoint"],
+            ],
+        )
+        .map(|url| Self::resolve_discovery_url(connection_url, url))
+        .transpose()?;
+
+        Ok(DiscoveryDocument {
+            engine_url,
+            token_endpoint,
+            auth_audience,
+            api_endpoint,
+            auth_required,
+        })
+    }
+
+    async fn discover(
+        connection_url: &str,
+        client: &reqwest::Client,
+    ) -> Result<DiscoveryDocument, FireboltError> {
+        let discovery_url = Self::discovery_url(connection_url)?;
+        let response = client
+            .get(discovery_url)
+            .header("User-Agent", crate::version::user_agent())
+            .send()
+            .await
+            .map_err(|e| FireboltError::Network(format!("Failed to discover Firebolt: {e}")))?;
+
+        if response.status() == 404 || response.status() == 405 {
+            return Ok(DiscoveryDocument {
+                engine_url: connection_url.to_string(),
+                token_endpoint: None,
+                auth_audience: None,
+                api_endpoint: None,
+                auth_required: false,
+            });
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.map_err(|e| {
+                FireboltError::Network(format!("Failed to read discovery response: {e}"))
+            })?;
+            return Err(FireboltError::Configuration(format!(
+                "Firebolt discovery failed with status {status}: {body}"
+            )));
+        }
+
+        let body = response.text().await.map_err(|e| {
+            FireboltError::Network(format!("Failed to read discovery response: {e}"))
+        })?;
+        let json: Value = serde_json::from_str(&body).map_err(|e| {
+            FireboltError::Configuration(format!("Failed to parse discovery response: {e}"))
+        })?;
+
+        Self::parse_discovery_document(connection_url, &json)
+    }
+
     pub fn with_credentials(mut self, client_id: String, client_secret: String) -> Self {
         self.client_id = Some(client_id);
         self.client_secret = Some(client_secret);
@@ -320,7 +643,70 @@ impl FireboltClientFactory {
         self
     }
 
+    pub fn with_url(mut self, url: String) -> Self {
+        self.connection_url = Some(url);
+        self
+    }
+
+    pub fn with_ssl_mode(mut self, ssl_mode: SslMode) -> Self {
+        self.ssl_mode = ssl_mode;
+        self
+    }
+
+    pub fn with_connection_parameter(mut self, key: String, value: String) -> Self {
+        let canonical_key = Self::canonical_parameter_key(&key);
+
+        match canonical_key {
+            "client_id" => self.client_id = Some(value),
+            "client_secret" => self.client_secret = Some(value),
+            "account_name" => self.account_name = Some(value),
+            "database" => self.database_name = Some(value),
+            "engine" => self.engine_name = Some(value),
+            PARAM_URL => self.connection_url = Some(value),
+            PARAM_SSL_MODE => match SslMode::parse(&value) {
+                Ok(ssl_mode) => self.ssl_mode = ssl_mode,
+                Err(_) => {
+                    // Store invalid values for build() to report as a regular configuration error.
+                    self.additional_parameters
+                        .insert(PARAM_SSL_MODE.to_string(), value);
+                }
+            },
+            _ => {
+                self.additional_parameters
+                    .insert(canonical_key.to_string(), value);
+            }
+        }
+
+        self
+    }
+
+    pub fn with_connection_parameters(mut self, parameters: HashMap<String, String>) -> Self {
+        for (key, value) in parameters {
+            self = self.with_connection_parameter(key, value);
+        }
+
+        self
+    }
+
     pub async fn build(self) -> Result<FireboltClient, FireboltError> {
+        if self.additional_parameters.contains_key(PARAM_SSL_MODE) {
+            return Err(FireboltError::Configuration(format!(
+                "Invalid ssl_mode '{}'. Expected 'strict' or 'none'",
+                self.additional_parameters
+                    .get(PARAM_SSL_MODE)
+                    .cloned()
+                    .unwrap_or_default()
+            )));
+        }
+
+        if self.connection_url.is_some() {
+            return self.build_discovery_client().await;
+        }
+
+        self.build_legacy_client().await
+    }
+
+    async fn build_legacy_client(self) -> Result<FireboltClient, FireboltError> {
         // 1. Validate required parameters
         let client_id = self
             .client_id
@@ -351,6 +737,9 @@ impl FireboltClientFactory {
             _parameters: HashMap::new(),
             _engine_url: engine_url,
             _api_endpoint: api_endpoint,
+            _token_endpoint: None,
+            _auth_audience: None,
+            _ssl_mode: SslMode::Strict,
         };
 
         if let Some(database_name) = self.database_name {
@@ -369,6 +758,94 @@ impl FireboltClientFactory {
         }
 
         Ok(client)
+    }
+
+    async fn build_discovery_client(self) -> Result<FireboltClient, FireboltError> {
+        let connection_url = self
+            .connection_url
+            .as_deref()
+            .ok_or_else(|| FireboltError::Configuration("url is required".to_string()))
+            .and_then(Self::normalize_engine_url)?;
+        let http_client = FireboltClient::http_client(self.ssl_mode)?;
+        let discovery = Self::discover(&connection_url, &http_client).await?;
+        let has_credentials = self.client_id.is_some() || self.client_secret.is_some();
+        let client_id = self.client_id.unwrap_or_default();
+        let client_secret = self.client_secret.unwrap_or_default();
+
+        if has_credentials && (client_id.is_empty() || client_secret.is_empty()) {
+            return Err(FireboltError::Configuration(
+                "Both client_id and client_secret are required when using service account authentication"
+                    .to_string(),
+            ));
+        }
+
+        if discovery.auth_required && !has_credentials {
+            return Err(FireboltError::Configuration(
+                "client_id and client_secret are required by Firebolt discovery".to_string(),
+            ));
+        }
+
+        let token = if has_credentials {
+            if let Some(token_endpoint) = &discovery.token_endpoint {
+                let (token, _expiration) = crate::auth::authenticate_with_client(
+                    http_client,
+                    client_id.clone(),
+                    client_secret.clone(),
+                    token_endpoint.clone(),
+                    discovery
+                        .auth_audience
+                        .clone()
+                        .or_else(|| Some(DEFAULT_AUTH_AUDIENCE.to_string())),
+                )
+                .await
+                .map_err(FireboltError::Authentication)?;
+                token
+            } else if let Some(api_endpoint) = &discovery.api_endpoint {
+                let (token, _expiration) = crate::auth::authenticate(
+                    client_id.clone(),
+                    client_secret.clone(),
+                    api_endpoint.clone(),
+                )
+                .await
+                .map_err(FireboltError::Authentication)?;
+                token
+            } else if discovery.auth_required {
+                return Err(FireboltError::Configuration(
+                    "Firebolt discovery requires authentication but did not provide a token endpoint"
+                        .to_string(),
+                ));
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut parameters = self
+            .additional_parameters
+            .into_iter()
+            .filter(|(key, _)| !Self::is_control_parameter(key))
+            .collect::<HashMap<_, _>>();
+
+        if let Some(database_name) = self.database_name {
+            parameters.insert("database".to_string(), database_name);
+        }
+
+        if let Some(engine_name) = self.engine_name {
+            parameters.insert("engine".to_string(), engine_name);
+        }
+
+        Ok(FireboltClient {
+            _client_id: client_id,
+            _client_secret: client_secret,
+            _token: token,
+            _parameters: parameters,
+            _engine_url: discovery.engine_url,
+            _api_endpoint: discovery.api_endpoint.unwrap_or(connection_url),
+            _token_endpoint: discovery.token_endpoint,
+            _auth_audience: discovery.auth_audience,
+            _ssl_mode: self.ssl_mode,
+        })
     }
 }
 
@@ -548,6 +1025,9 @@ mod tests {
             _parameters: HashMap::new(),
             _engine_url: "https://test.engine.url/".to_string(),
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
+            _token_endpoint: None,
+            _auth_audience: None,
+            _ssl_mode: SslMode::Strict,
         }
     }
 
@@ -582,6 +1062,9 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: api_endpoint,
         };
 
@@ -627,6 +1110,9 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: api_endpoint,
         };
 
@@ -672,6 +1158,9 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: None,
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: api_endpoint,
         };
 
@@ -696,6 +1185,9 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         };
 
@@ -720,6 +1212,9 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("nonexistent_account".to_string()),
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         };
 
@@ -744,6 +1239,9 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            connection_url: None,
+            ssl_mode: SslMode::Strict,
+            additional_parameters: HashMap::new(),
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         };
 
@@ -899,6 +1397,202 @@ mod tests {
         mock.assert_async().await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FireboltError::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_build_discovery_client_uses_query_parameters() {
+        let mut server = mockito::Server::new_async().await;
+        let query_url = format!("{}/query", server.url());
+        let discovery_body = serde_json::json!({
+            "query": { "url": query_url },
+            "auth": { "type": "none" }
+        })
+        .to_string();
+
+        let discovery_mock = server
+            .mock("GET", "/.well-known/firebolt")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(discovery_body)
+            .create_async()
+            .await;
+
+        let query_mock = server
+            .mock("POST", "/query")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("database".into(), "test_db".into()),
+                mockito::Matcher::UrlEncoded("engine".into(), "test_engine".into()),
+                mockito::Matcher::UrlEncoded("statement_timeout".into(), "1000".into()),
+                mockito::Matcher::UrlEncoded("output_format".into(), "JSON_Compact".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = FireboltClient::builder()
+            .with_url(server.url())
+            .with_database("test_db".to_string())
+            .with_engine("test_engine".to_string())
+            .with_connection_parameter("statement_timeout".to_string(), "1000".to_string())
+            .build()
+            .await
+            .unwrap();
+
+        assert_eq!(client.engine_url(), query_url);
+        assert_eq!(
+            client.parameters().get("database"),
+            Some(&"test_db".to_string())
+        );
+        assert_eq!(
+            client.parameters().get("engine"),
+            Some(&"test_engine".to_string())
+        );
+
+        let result = client.query("SELECT 1").await;
+
+        discovery_mock.assert_async().await;
+        query_mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_discovery_client_falls_back_to_direct_url_when_missing() {
+        let mut server = mockito::Server::new_async().await;
+        let discovery_mock = server
+            .mock("GET", "/.well-known/firebolt")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let query_mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[42]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = FireboltClient::builder()
+            .with_url(server.url())
+            .build()
+            .await
+            .unwrap();
+
+        let result = client.query("SELECT 42").await;
+
+        discovery_mock.assert_async().await;
+        query_mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_discovery_client_authenticates_with_token_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        let query_url = format!("{}/query", server.url());
+        let token_endpoint = format!("{}/oauth/token", server.url());
+        let discovery_body = serde_json::json!({
+            "query_endpoint": query_url,
+            "token_endpoint": token_endpoint,
+            "audience": "https://custom.audience"
+        })
+        .to_string();
+
+        let discovery_mock = server
+            .mock("GET", "/.well-known/firebolt")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(discovery_body)
+            .create_async()
+            .await;
+
+        let auth_mock = server
+            .mock("POST", "/oauth/token")
+            .match_body(mockito::Matcher::Regex(
+                ".*\"audience\":\"https://custom\\.audience\".*".to_string(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token": "discovered_token", "expires_in": 3600}"#)
+            .create_async()
+            .await;
+
+        let query_mock = server
+            .mock("POST", "/query")
+            .match_header("Authorization", "Bearer discovered_token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = FireboltClient::builder()
+            .with_url(server.url())
+            .with_credentials("client_id".to_string(), "client_secret".to_string())
+            .build()
+            .await
+            .unwrap();
+
+        let result = client.query("SELECT 1").await;
+
+        discovery_mock.assert_async().await;
+        auth_mock.assert_async().await;
+        query_mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_normalized_connection_parameter_aliases() {
+        let mut server = mockito::Server::new_async().await;
+        let discovery_mock = server
+            .mock("GET", "/.well-known/firebolt")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let mut params = HashMap::new();
+        params.insert("url".to_string(), server.url());
+        params.insert("database_name".to_string(), "db_alias".to_string());
+        params.insert("engine_name".to_string(), "engine_alias".to_string());
+        params.insert("ssl_mode".to_string(), "strict".to_string());
+        params.insert("timezone".to_string(), "UTC".to_string());
+
+        let client = FireboltClient::builder()
+            .with_connection_parameters(params)
+            .build()
+            .await
+            .unwrap();
+
+        discovery_mock.assert_async().await;
+        assert_eq!(
+            client.parameters().get("database"),
+            Some(&"db_alias".to_string())
+        );
+        assert_eq!(
+            client.parameters().get("engine"),
+            Some(&"engine_alias".to_string())
+        );
+        assert_eq!(
+            client.parameters().get("timezone"),
+            Some(&"UTC".to_string())
+        );
+        assert!(!client.parameters().contains_key("ssl_mode"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_ssl_mode_returns_configuration_error() {
+        let result = FireboltClient::builder()
+            .with_url("http://localhost:3473".to_string())
+            .with_connection_parameter("ssl_mode".to_string(), "disabled".to_string())
+            .build()
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
     }
 
     #[tokio::test]

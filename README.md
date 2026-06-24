@@ -57,6 +57,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Discovery-based connections
+
+The legacy cloud connection flow above remains the default. To opt into the new discovery-based flow, provide a direct Firebolt URL. The SDK calls `/.well-known/firebolt` on that URL when available, then sends the selected database, engine, and additional settings as query parameters on each request.
+
+```rust
+use firebolt::{FireboltClient, SslMode};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = FireboltClient::builder()
+        .with_url("http://localhost:3473".to_string())
+        .with_database("firebolt".to_string())
+        .with_ssl_mode(SslMode::Strict)
+        .with_connection_parameter("query_label".to_string(), "rust_sdk".to_string())
+        .build()
+        .await?;
+
+    let result = client.query("SELECT 42 AS answer").await?;
+    println!("Rows: {}", result.rows.len());
+    Ok(())
+}
+```
+
+Use `SslMode::None` (or the normalized connection parameter `ssl_mode=none`) only for trusted development endpoints where certificate verification must be disabled.
+
 ## Run Queries
 
 Once connected, you can execute SQL queries using the `query` method. The SDK returns results with type-safe parsing for all Firebolt data types.
