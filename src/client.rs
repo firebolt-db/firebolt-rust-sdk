@@ -853,6 +853,7 @@ impl FireboltClientFactory {
 mod tests {
     use super::*;
     use std::sync::{Mutex, MutexGuard, OnceLock};
+    use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
     fn env_guard() -> MutexGuard<'static, ()> {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -860,6 +861,11 @@ mod tests {
             .get_or_init(|| Mutex::new(()))
             .lock()
             .expect("environment lock poisoned")
+    }
+
+    async fn async_env_guard() -> AsyncMutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| AsyncMutex::new(())).lock().await
     }
 
     #[tokio::test]
@@ -1042,7 +1048,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_id() {
-        let _guard = env_guard();
+        let _guard = async_env_guard().await;
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -1091,7 +1097,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_secret() {
-        let _guard = env_guard();
+        let _guard = async_env_guard().await;
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -1140,7 +1146,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_account_name() {
-        let _guard = env_guard();
+        let _guard = async_env_guard().await;
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -1189,7 +1195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_engine_url_success() {
-        let _guard = env_guard();
+        let _guard = async_env_guard().await;
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -1217,7 +1223,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_account_not_found() {
-        let _guard = env_guard();
+        let _guard = async_env_guard().await;
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -1245,7 +1251,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_server_error() {
-        let _guard = env_guard();
+        let _guard = async_env_guard().await;
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
