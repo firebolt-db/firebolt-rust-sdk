@@ -852,6 +852,15 @@ impl FireboltClientFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn env_guard() -> MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("environment lock poisoned")
+    }
 
     #[tokio::test]
     async fn test_execute_query_request_success() {
@@ -1033,6 +1042,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_id() {
+        let _guard = env_guard();
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -1081,6 +1091,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_secret() {
+        let _guard = env_guard();
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -1129,6 +1140,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_account_name() {
+        let _guard = env_guard();
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -1177,6 +1189,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_engine_url_success() {
+        let _guard = env_guard();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -1204,6 +1217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_account_not_found() {
+        let _guard = env_guard();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -1231,6 +1245,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_server_error() {
+        let _guard = env_guard();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -1258,6 +1273,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_default() {
+        let _guard = env_guard();
         std::env::remove_var("FIREBOLT_API_ENDPOINT");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -1267,6 +1283,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_from_env() {
+        let _guard = env_guard();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "custom.api.firebolt.io");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -1278,6 +1295,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_with_https_prefix() {
+        let _guard = env_guard();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "https://custom.api.firebolt.io");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -1289,6 +1307,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_with_http_prefix() {
+        let _guard = env_guard();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "http://custom.api.firebolt.io");
 
         let result = FireboltClientFactory::get_api_endpoint();
