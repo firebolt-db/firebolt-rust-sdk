@@ -86,7 +86,9 @@ async fn test_query_with_invalid_token() {
         .await
         .expect("Failed to build client");
 
-    client.set_token("invalid_token".to_string());
+    client
+        .set_token("invalid_token".to_string())
+        .expect("a cloud client accepts a token");
 
     let result = client.query("SELECT 1 as test_column").await;
 
