@@ -169,7 +169,12 @@ impl FireboltClient {
             let url = Url::parse(FireboltClientFactory::fix_schema(endpoint_str).as_str())
                 .map_err(|e| FireboltError::HeaderParsing(format!("Invalid endpoint URL: {e}")))?;
 
-            let base_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+            let scheme = url.scheme();
+            let host = url.host_str().unwrap_or("");
+            let base_url = match url.port() {
+                Some(port) => format!("{scheme}://{host}:{port}"),
+                None => format!("{scheme}://{host}"),
+            };
             let path = url.path();
             self._engine_url = if path == "/" || path.is_empty() {
                 base_url
@@ -1177,6 +1182,28 @@ mod tests {
         assert_eq!(result, "http://custom.api.firebolt.io");
 
         std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_update_endpoint_keeps_port() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_UPDATE_ENDPOINT, "http://localhost:3473/x")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_core_client(server.url());
+
+        let result = client.query("SELECT 1").await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(client.engine_url(), "http://localhost:3473/x");
     }
 
     #[tokio::test]
