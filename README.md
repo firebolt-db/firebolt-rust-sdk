@@ -35,6 +35,7 @@ The SDK uses the following parameters to connect to Firebolt:
 - `account_name`: The name of your Firebolt [account](https://docs.firebolt.io/guides/managing-your-organization/managing-accounts).
 - `database`: (Optional) The name of the [database](https://docs.firebolt.io/overview/security/rbac/database-permissions) to connect to.
 - `engine`: (Optional) The name of the [engine](https://docs.firebolt.io/overview/security/rbac/engine-permissions) to run SQL queries on.
+- `url`: (Firebolt Core only) The URL of a [Firebolt Core](https://docs.firebolt.io/firebolt-core/) server, for example `http://localhost:3473`. Selects the no-authentication Core connection; `client_id`, `client_secret`, `account_name` and `engine` are not accepted alongside it.
 
 To establish a connection to a Firebolt database, use the builder pattern with your credentials and database details. The following example shows how to connect to Firebolt:
 
@@ -56,6 +57,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Connect to Firebolt Core
+
+[Firebolt Core](https://docs.firebolt.io/firebolt-core/) has no authentication. Pass its URL with `with_url` and omit credentials:
+
+```rust
+use firebolt::FireboltClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = FireboltClient::builder()
+        .with_url("http://localhost:3473".to_string())
+        .with_database("your_database_name".to_string())
+        .build()
+        .await?;
+
+    let result = client.query("SELECT 1").await?;
+
+    println!("Rows: {}", result.rows.len());
+    Ok(())
+}
+```
+
+The URL must include an `http://` or `https://` scheme and a host; the port is optional, and a path is allowed for a Core server behind a reverse proxy. A `user:password@` authority or a query string is rejected. `with_database` is optional and issues `USE DATABASE` on connect.
+
+Core has no service accounts, accounts or engines, so `with_credentials`, `with_account` and `with_engine` are rejected with a `FireboltError::Configuration` rather than ignored. For a Core client, `client_id()`, `client_secret()` and `api_endpoint()` return `None`.
 
 ## Run Queries
 

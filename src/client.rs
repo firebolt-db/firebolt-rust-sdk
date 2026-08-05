@@ -374,6 +374,25 @@ impl FireboltClientFactory {
     }
 
     async fn build_core(self, url: String) -> Result<FireboltClient, FireboltError> {
+        if self.client_id.is_some() || self.client_secret.is_some() {
+            return Err(FireboltError::Configuration(
+                "client_id and client_secret cannot be combined with url: Firebolt Core has no authentication".to_string(),
+            ));
+        }
+
+        if self.account_name.is_some() {
+            return Err(FireboltError::Configuration(
+                "account_name cannot be combined with url: Firebolt Core has no accounts"
+                    .to_string(),
+            ));
+        }
+
+        if self.engine_name.is_some() {
+            return Err(FireboltError::Configuration(
+                "engine cannot be combined with url: Firebolt Core has no engines".to_string(),
+            ));
+        }
+
         Self::validate_core_url(&url)?;
 
         let mut client = FireboltClient {
@@ -652,6 +671,51 @@ mod tests {
         let error = result.unwrap_err();
         assert!(matches!(error, FireboltError::Configuration(_)));
         assert!(format!("{error}").contains("query string"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_credentials() {
+        let server = mockito::Server::new_async().await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_credentials("id".to_string(), "secret".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("client_id"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_account() {
+        let server = mockito::Server::new_async().await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_account("my_account".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("account_name"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_engine() {
+        let server = mockito::Server::new_async().await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_engine("my_engine".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("engine"));
     }
 
     #[test]
