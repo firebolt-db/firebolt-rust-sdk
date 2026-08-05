@@ -29,10 +29,10 @@ async fn test_client_factory_build_integration_happy_path() {
 
     match result {
         Ok(client) => {
-            assert!(!client.client_id().is_empty());
-            assert!(!client.client_secret().is_empty());
+            assert!(client.client_id().is_some_and(|id| !id.is_empty()));
+            assert!(client.client_secret().is_some_and(|s| !s.is_empty()));
             assert!(!client.engine_url().is_empty());
-            assert!(!client.api_endpoint().is_empty());
+            assert!(client.api_endpoint().is_some_and(|e| !e.is_empty()));
         }
         Err(e) => {
             panic!("Integration test failed: {e:?}");
@@ -58,10 +58,10 @@ async fn test_client_factory_build_integration_no_database_no_engine() {
 
     match result {
         Ok(client) => {
-            assert!(!client.client_id().is_empty());
-            assert!(!client.client_secret().is_empty());
+            assert!(client.client_id().is_some_and(|id| !id.is_empty()));
+            assert!(client.client_secret().is_some_and(|s| !s.is_empty()));
             assert!(!client.engine_url().is_empty());
-            assert!(!client.api_endpoint().is_empty());
+            assert!(client.api_endpoint().is_some_and(|e| !e.is_empty()));
         }
         Err(e) => {
             panic!("Integration test failed: {e:?}");
