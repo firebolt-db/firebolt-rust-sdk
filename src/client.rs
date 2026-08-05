@@ -66,19 +66,21 @@ impl FireboltClient {
         let status = response.status();
 
         if status == 401 {
-            let refresh = if should_retry {
-                self._auth.as_ref().map(|auth| {
-                    (
-                        auth.client_id.clone(),
-                        auth.client_secret.clone(),
-                        auth.api_endpoint.clone(),
-                    )
-                })
-            } else {
-                None
-            };
+            let credentials = self._auth.as_ref().map(|auth| {
+                (
+                    auth.client_id.clone(),
+                    auth.client_secret.clone(),
+                    auth.api_endpoint.clone(),
+                )
+            });
 
-            if let Some((client_id, client_secret, api_endpoint)) = refresh {
+            if let Some((client_id, client_secret, api_endpoint)) = credentials {
+                if !should_retry {
+                    return Err(FireboltError::Authentication(
+                        "Authentication failed after token refresh".to_string(),
+                    ));
+                }
+
                 let (new_token, _expiration) =
                     crate::auth::authenticate(client_id, client_secret, api_endpoint)
                         .await
@@ -373,12 +375,12 @@ impl FireboltClientFactory {
 
     pub async fn build(mut self) -> Result<FireboltClient, FireboltError> {
         match self.url.take() {
-            Some(url) => self.build_core(url).await,
+            Some(url) => self.build_core(&url).await,
             None => self.build_cloud().await,
         }
     }
 
-    async fn build_core(self, url: String) -> Result<FireboltClient, FireboltError> {
+    async fn build_core(self, url: &str) -> Result<FireboltClient, FireboltError> {
         if self.client_id.is_some() || self.client_secret.is_some() {
             return Err(FireboltError::Configuration(
                 "client_id and client_secret cannot be combined with url: Firebolt Core has no authentication".to_string(),
@@ -398,12 +400,10 @@ impl FireboltClientFactory {
             ));
         }
 
-        Self::validate_core_url(&url)?;
-
         let mut client = FireboltClient {
             _auth: None,
             _parameters: HashMap::new(),
-            _engine_url: url,
+            _engine_url: Self::validate_core_url(url)?,
         };
 
         if let Some(database_name) = self.database_name {
@@ -416,14 +416,16 @@ impl FireboltClientFactory {
         Ok(client)
     }
 
-    fn validate_core_url(url: &str) -> Result<(), FireboltError> {
+    // Returns the canonical form: what the caller passed may differ from what url::Url accepted.
+    // Errors never echo the url back, since it may carry a password or a token.
+    fn validate_core_url(url: &str) -> Result<String, FireboltError> {
         let parsed = Url::parse(url)
-            .map_err(|e| FireboltError::Configuration(format!("Invalid url '{url}': {e}")))?;
+            .map_err(|e| FireboltError::Configuration(format!("Invalid url: {e}")))?;
 
         if parsed.scheme() != "http" && parsed.scheme() != "https" {
-            return Err(FireboltError::Configuration(format!(
-                "Invalid url '{url}': scheme must be http or https"
-            )));
+            return Err(FireboltError::Configuration(
+                "Invalid url: scheme must be http or https".to_string(),
+            ));
         }
 
         let host_missing = match parsed.host_str() {
@@ -431,24 +433,31 @@ impl FireboltClientFactory {
             None => true,
         };
         if host_missing {
-            return Err(FireboltError::Configuration(format!(
-                "Invalid url '{url}': missing host"
-            )));
+            return Err(FireboltError::Configuration(
+                "Invalid url: missing host".to_string(),
+            ));
         }
 
         if !parsed.username().is_empty() || parsed.password().is_some() {
-            return Err(FireboltError::Configuration(format!(
-                "Invalid url '{url}': credentials in the url are not supported, Firebolt Core has no authentication"
-            )));
+            return Err(FireboltError::Configuration(
+                "Invalid url: credentials in the url are not supported, Firebolt Core has no authentication".to_string(),
+            ));
+        }
+
+        if parsed.path() != "/" && !parsed.path().is_empty() {
+            return Err(FireboltError::Configuration(
+                "Invalid url: a path is not supported, expected <scheme>://<host>[:<port>]"
+                    .to_string(),
+            ));
         }
 
         if parsed.query().is_some() || parsed.fragment().is_some() {
-            return Err(FireboltError::Configuration(format!(
-                "Invalid url '{url}': a query string or fragment is not supported"
-            )));
+            return Err(FireboltError::Configuration(
+                "Invalid url: a query string or fragment is not supported".to_string(),
+            ));
         }
 
-        Ok(())
+        Ok(parsed.to_string())
     }
 
     async fn build_cloud(self) -> Result<FireboltClient, FireboltError> {
@@ -581,7 +590,33 @@ mod tests {
         assert_eq!(client.client_id(), None);
         assert_eq!(client.client_secret(), None);
         assert_eq!(client.api_endpoint(), None);
-        assert_eq!(client.engine_url(), server.url());
+        assert_eq!(client.engine_url(), format!("{}/", server.url()));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_normalises_the_url() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = FireboltClient::builder()
+            .with_url(format!("{} ", server.url()))
+            .build()
+            .await
+            .expect("core build should succeed");
+
+        assert_eq!(client.engine_url(), format!("{}/", server.url()));
+
+        let result = client.query("SELECT 1").await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -674,13 +709,50 @@ mod tests {
     #[tokio::test]
     async fn test_build_core_rejects_url_with_query_string() {
         let result = FireboltClient::builder()
-            .with_url("http://localhost:3473/core?tenant=a".to_string())
+            .with_url("http://localhost:3473?tenant=a".to_string())
             .build()
             .await;
 
         let error = result.unwrap_err();
         assert!(matches!(error, FireboltError::Configuration(_)));
         assert!(format!("{error}").contains("query string"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_url_with_path() {
+        let result = FireboltClient::builder()
+            .with_url("http://localhost:3473/firebolt".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("path"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_accepts_root_path() {
+        let server = mockito::Server::new_async().await;
+        let root = format!("{}/", server.url());
+
+        let result = FireboltClient::builder().with_url(root).build().await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_core_url_error_does_not_leak_credentials() {
+        let password = "p".repeat(8);
+        let authority = format!("u:{password}@localhost:3473");
+
+        let result = FireboltClient::builder()
+            .with_url(format!("http://{authority}"))
+            .build()
+            .await;
+
+        let error = format!("{}", result.unwrap_err());
+        assert!(error.contains("credentials in the url"));
+        assert!(!error.contains(&password));
     }
 
     #[tokio::test]
@@ -816,10 +888,9 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FireboltError::Authentication(_)
-        ));
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Authentication(_)));
+        assert!(format!("{error}").contains("after token refresh"));
     }
 
     #[tokio::test]
