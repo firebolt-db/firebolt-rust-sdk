@@ -8,7 +8,7 @@ The Firebolt Rust SDK enables Rust developers to connect to Firebolt databases s
 
 ## Prerequisites
 
-You must have the following prerequisites before you can connect your Firebolt account to Rust:
+You must have the following prerequisites before you can connect your Firebolt account to Rust. Only Rust itself is required to connect to [Firebolt Core](https://docs.firebolt.io/firebolt-core/), which has no accounts and no authentication — see [Connect to Firebolt Core](#connect-to-firebolt-core).
 
 * **Rust installed and configured** on your system. The minimum supported version is 1.70 or higher. If you do not have Rust installed, you can download it from [rustup.rs](https://rustup.rs/).
 * **Firebolt account** – You need an active Firebolt account. If you do not have one, you can [sign up](https://go.firebolt.io/signup) for one.
@@ -35,6 +35,7 @@ The SDK uses the following parameters to connect to Firebolt:
 - `account_name`: The name of your Firebolt [account](https://docs.firebolt.io/guides/managing-your-organization/managing-accounts).
 - `database`: (Optional) The name of the [database](https://docs.firebolt.io/overview/security/rbac/database-permissions) to connect to.
 - `engine`: (Optional) The name of the [engine](https://docs.firebolt.io/overview/security/rbac/engine-permissions) to run SQL queries on.
+- `url`: (Firebolt Core only) The address of a [Firebolt Core](https://docs.firebolt.io/firebolt-core/) server as `<scheme>://<host>[:<port>]`, for example `http://localhost:3473`. Selects the no-authentication Core connection; `client_id`, `client_secret`, `account_name` and `engine` are not accepted alongside it.
 
 To establish a connection to a Firebolt database, use the builder pattern with your credentials and database details. The following example shows how to connect to Firebolt:
 
@@ -56,6 +57,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Connect to Firebolt Core
+
+[Firebolt Core](https://docs.firebolt.io/firebolt-core/) has no authentication. Pass its URL with `with_url` and omit credentials:
+
+```rust
+use firebolt::FireboltClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = FireboltClient::builder()
+        .with_url("http://localhost:3473".to_string())
+        .with_database("your_database_name".to_string())
+        .build()
+        .await?;
+
+    let result = client.query("SELECT 1").await?;
+
+    println!("Rows: {}", result.rows.len());
+    Ok(())
+}
+```
+
+The URL must be `<scheme>://<host>[:<port>]` with an `http` or `https` scheme; the port is optional. A path, a `user:password@` authority, and a query string or fragment are each rejected. `with_database` is optional and issues `USE DATABASE` on connect.
+
+Core has no service accounts, accounts or engines, so `with_credentials`, `with_account` and `with_engine` are rejected with a `FireboltError::Configuration` rather than ignored. For a Core client, `client_id()`, `client_secret()` and `api_endpoint()` return `None`.
 
 ## Run Queries
 
@@ -226,8 +253,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Error | Likely Cause                  | Solution                                                                       |
 |-------|-------------------------------|--------------------------------------------------------------------------------|
-| `Authentication error: Invalid credentials` | Incorrect client ID or secret | Verify your service account credentials in the Firebolt console                |
-| `Configuration error: CLIENT_ID is required` | Missing required parameter    | Ensure all required parameters are provided to the builder                     |
+| `Authentication error: Invalid credentials` (Cloud) | Incorrect client ID or secret | Verify your service account credentials in the Firebolt console                |
+| `Authentication error: ...` (Core) | The Core server rejected the request | Core does not authenticate. The message is the server's own response body — check what sits in front of your Core server |
+| `Configuration error: client_id is required` | Missing required parameter    | Ensure all required parameters are provided to the builder                     |
+| `Configuration error: ... cannot be combined with url` | Cloud parameters passed with a Core `url` | Drop `with_credentials`, `with_account` and `with_engine`; Core has none of them |
+| `Configuration error: Invalid url: ...` | Malformed Core `url`          | Use `<scheme>://<host>[:<port>]` with an `http` or `https` scheme, and no path, credentials or query string |
 | `Network error: Failed to get engine URL` | Network connectivity issues   | Check your internet connection and firewall settings                           |
 | `Query error: Line 1, Column 15: relation \"non_existent_table\" does not exist` | Invalid SQL query             | Verify your SQL query has correct syntax and uses valid table and column names |
 
