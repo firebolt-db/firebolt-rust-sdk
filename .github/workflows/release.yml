@@ -10,10 +10,18 @@ on:
         required: false
         description: 'Trigger a major release (optional). Leave empty for regular release.'
 
+permissions: {}
+
 jobs:
   integration-tests:
+    permissions:
+      contents: read
     uses: ./.github/workflows/integration-tests.yml
-    secrets: inherit
+    with:
+      use-cache: false # Don't restore or save caches in the release path.
+    secrets:
+      FIREBOLT_CLIENT_ID_STG_NEW_IDN: ${{ secrets.FIREBOLT_CLIENT_ID_STG_NEW_IDN }}
+      FIREBOLT_CLIENT_SECRET_STG_NEW_IDN: ${{ secrets.FIREBOLT_CLIENT_SECRET_STG_NEW_IDN }}
 
   release:
     needs: integration-tests
@@ -30,11 +38,12 @@ jobs:
           private-key: ${{ secrets.GH_APP_FB_DB_CI_WRITER_APP_KEY_PEM }}
           permission-contents: write
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: main
           token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true # The release steps push the version bump and tag.
 
       - name: Setup git config
         run: |
@@ -46,17 +55,19 @@ jobs:
         id: git_info
         run: |
           OLD_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
-          CHANGE_LOG=$(git log $OLD_TAG..HEAD --pretty=format:%s)
-          echo "old_version=$(echo $OLD_TAG | cut -c 2-)" >> $GITHUB_OUTPUT
-          echo "changes<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGE_LOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          CHANGE_LOG=$(git log "$OLD_TAG"..HEAD --pretty=format:%s)
+          {
+            echo "old_version=$(echo "$OLD_TAG" | cut -c 2-)"
+            echo "changes<<EOF"
+            echo "$CHANGE_LOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "Previous tag: $OLD_TAG"
         shell: bash
 
       - name: Generate new version tag
         id: tag_generation
-        uses: firebolt-db/action-generate-version@main
+        uses: firebolt-db/action-generate-version@b3f5f7643c9ffe0c1331f086cf1eeb3680114b13 # main
         with:
           changes: ${{ steps.git_info.outputs.changes }}
           old-tag: ${{ steps.git_info.outputs.old_version }}
@@ -64,34 +75,16 @@ jobs:
           major-release: ${{ inputs.major-release }}
 
       - name: Version bump
+        env:
+          NEW_VERSION: ${{ steps.tag_generation.outputs.new-tag }}
         run: |
-          NEW_VERSION=${{ steps.tag_generation.outputs.new-tag }}
           sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" Cargo.toml
         shell: bash
         # We need to build the project to ensure that the Cargo.lock file is updated before committing it.
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Cache cargo registry
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v3
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+        run: |
+          rustup toolchain install stable
+          rustup override set stable
 
       - name: Build
         run: cargo build --release --verbose
@@ -100,28 +93,36 @@ jobs:
         run: cargo test --lib --verbose
 
       - name: Commit version bump
+        env:
+          NEW_VERSION: ${{ steps.tag_generation.outputs.new-tag }}
         run: |
           git add Cargo.toml
           git add Cargo.lock
-          git commit -m "Automatic version bump to ${{ steps.tag_generation.outputs.new-tag }}"
+          git commit -m "Automatic version bump to ${NEW_VERSION}"
           git push origin main
         shell: bash
 
       - name: Publish tag on github
+        env:
+          NEW_VERSION: ${{ steps.tag_generation.outputs.new-tag }}
         run: |
-          git tag v${{ steps.tag_generation.outputs.new-tag }}
-          git push origin v${{ steps.tag_generation.outputs.new-tag }}
+          git tag "v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
         shell: bash
 
       - name: Login to crates.io
-        run: cargo login ${{ secrets.CRATES_IO_TOKEN }}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo login <<< "$CRATES_IO_TOKEN"
 
       - name: Publish to crates.io
         run: cargo publish
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ steps.tag_generation.outputs.new-tag }}
+          # Use the v-prefixed tag pushed above; without the prefix the action
+          # creates a second, unprefixed tag (as happened for 0.1.0).
+          tag_name: v${{ steps.tag_generation.outputs.new-tag }}
           generate_release_notes: true
           prerelease: ${{ inputs.pre-release-tag != '' }}
