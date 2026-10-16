@@ -67,7 +67,7 @@ jobs:
 
       - name: Generate new version tag
         id: tag_generation
-        uses: firebolt-db/action-generate-version@b3f5f7643c9ffe0c1331f086cf1eeb3680114b13 # main
+        uses: firebolt-db/action-generate-version@1021b71726a3077b3887f1b15925be3196c7bc3b # v1.1.0
         with:
           changes: ${{ steps.git_info.outputs.changes }}
           old-tag: ${{ steps.git_info.outputs.old_version }}
