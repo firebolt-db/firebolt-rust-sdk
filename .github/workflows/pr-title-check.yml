@@ -4,11 +4,15 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
 
+permissions: {}
+
 jobs:
   pr-formatting:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     steps:
       - name: Formatting conventions
-        uses: firebolt-db/action-pr-checks@main
+        uses: firebolt-db/action-pr-checks@519d59493b028e944971deaeca570933c378f09e # main
         with:
           github-key: ${{ secrets.GITHUB_TOKEN }}
