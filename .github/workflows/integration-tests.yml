@@ -2,7 +2,17 @@ name: Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      use-cache:
+        description: 'Restore and save the cargo caches'
+        type: boolean
+        default: true
   workflow_call:
+    inputs:
+      use-cache:
+        description: 'Restore and save the cargo caches (the release passes false)'
+        type: boolean
+        default: true
     secrets:
       FIREBOLT_CLIENT_ID_STG_NEW_IDN:
         required: true
@@ -28,18 +38,21 @@ jobs:
           rustup override set stable
 
       - name: Cache cargo registry
+        if: inputs.use-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
+        if: inputs.use-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo build
+        if: inputs.use-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target

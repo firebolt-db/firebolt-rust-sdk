@@ -17,6 +17,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/integration-tests.yml
+    with:
+      use-cache: false # Don't restore or save caches in the release path.
     secrets:
       FIREBOLT_CLIENT_ID_STG_NEW_IDN: ${{ secrets.FIREBOLT_CLIENT_ID_STG_NEW_IDN }}
       FIREBOLT_CLIENT_SECRET_STG_NEW_IDN: ${{ secrets.FIREBOLT_CLIENT_SECRET_STG_NEW_IDN }}
@@ -119,6 +121,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ steps.tag_generation.outputs.new-tag }}
+          # Use the v-prefixed tag pushed above; without the prefix the action
+          # creates a second, unprefixed tag (as happened for 0.1.0).
+          tag_name: v${{ steps.tag_generation.outputs.new-tag }}
           generate_release_notes: true
           prerelease: ${{ inputs.pre-release-tag != '' }}
