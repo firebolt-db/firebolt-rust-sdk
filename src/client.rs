@@ -9,13 +9,18 @@ const HEADER_RESET_SESSION: &str = "Firebolt-Reset-Session";
 const HEADER_REMOVE_PARAMETERS: &str = "Firebolt-Remove-Parameters";
 
 #[derive(Debug)]
+struct CloudAuth {
+    client_id: String,
+    client_secret: String,
+    api_endpoint: String,
+    token: String,
+}
+
+#[derive(Debug)]
 pub struct FireboltClient {
-    _client_id: String,
-    _client_secret: String,
-    _token: String,
+    _auth: Option<CloudAuth>,
     _parameters: HashMap<String, String>,
     _engine_url: String,
-    _api_endpoint: String,
 }
 
 impl FireboltClient {
@@ -37,40 +42,68 @@ impl FireboltClient {
         should_retry: bool,
     ) -> Result<ResultSet, FireboltError> {
         let client = reqwest::Client::new();
-        let token = &self._token;
 
-        let response = client
+        let mut request = client
             .post(url)
             .query(params)
-            .header("Authorization", format!("Bearer {token}"))
             .header("User-Agent", crate::version::user_agent())
             .header(
                 "Firebolt-Protocol-Version",
                 crate::version::PROTOCOL_VERSION,
             )
-            .body(sql.to_string())
+            .body(sql.to_string());
+
+        if let Some(auth) = &self._auth {
+            let token = &auth.token;
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| FireboltError::Network(format!("Request failed: {e}")))?;
 
         let status = response.status();
 
-        if status == 401 && should_retry {
-            let (new_token, _expiration) = crate::auth::authenticate(
-                self.client_id().to_string(),
-                self.client_secret().to_string(),
-                self.api_endpoint().to_string(),
-            )
-            .await
-            .map_err(|e| FireboltError::Authentication(format!("Token refresh failed: {e}")))?;
+        if status == 401 {
+            let credentials = self._auth.as_ref().map(|auth| {
+                (
+                    auth.client_id.clone(),
+                    auth.client_secret.clone(),
+                    auth.api_endpoint.clone(),
+                )
+            });
 
-            self.set_token(new_token);
-            Box::pin(self.execute_query_request(url, sql, params, false)).await
-        } else if status == 401 {
-            Err(FireboltError::Authentication(
-                "Authentication failed after token refresh".to_string(),
-            ))
-        } else if status.is_server_error() {
+            if let Some((client_id, client_secret, api_endpoint)) = credentials {
+                if !should_retry {
+                    return Err(FireboltError::Authentication(
+                        "Authentication failed after token refresh".to_string(),
+                    ));
+                }
+
+                let (new_token, _expiration) =
+                    crate::auth::authenticate(client_id, client_secret, api_endpoint)
+                        .await
+                        .map_err(|e| {
+                            FireboltError::Authentication(format!("Token refresh failed: {e}"))
+                        })?;
+
+                self.set_token(new_token)?;
+                return Box::pin(self.execute_query_request(url, sql, params, false)).await;
+            }
+
+            let body = response.text().await.map_err(|e| {
+                FireboltError::Network(format!("Failed to read error response: {e}"))
+            })?;
+
+            return Err(FireboltError::Authentication(if body.trim().is_empty() {
+                "Authentication failed".to_string()
+            } else {
+                body
+            }));
+        }
+
+        if status.is_server_error() {
             let body = response.text().await.map_err(|e| {
                 FireboltError::Network(format!("Failed to read error response: {e}"))
             })?;
@@ -90,16 +123,16 @@ impl FireboltClient {
         }
     }
 
-    pub fn client_id(&self) -> &str {
-        &self._client_id
+    pub fn client_id(&self) -> Option<&str> {
+        self._auth.as_ref().map(|auth| auth.client_id.as_str())
     }
 
-    pub fn client_secret(&self) -> &str {
-        &self._client_secret
+    pub fn client_secret(&self) -> Option<&str> {
+        self._auth.as_ref().map(|auth| auth.client_secret.as_str())
     }
 
-    pub fn api_endpoint(&self) -> &str {
-        &self._api_endpoint
+    pub fn api_endpoint(&self) -> Option<&str> {
+        self._auth.as_ref().map(|auth| auth.api_endpoint.as_str())
     }
 
     pub fn engine_url(&self) -> &str {
@@ -110,8 +143,16 @@ impl FireboltClient {
         &self._parameters
     }
 
-    pub fn set_token(&mut self, token: String) {
-        self._token = token;
+    pub fn set_token(&mut self, token: String) -> Result<(), FireboltError> {
+        match self._auth.as_mut() {
+            Some(auth) => {
+                auth.token = token;
+                Ok(())
+            }
+            None => Err(FireboltError::Configuration(
+                "set_token is not applicable to a Firebolt Core connection, which has no authentication".to_string(),
+            )),
+        }
     }
 
     pub fn builder() -> FireboltClientFactory {
@@ -130,7 +171,12 @@ impl FireboltClient {
             let url = Url::parse(FireboltClientFactory::fix_schema(endpoint_str).as_str())
                 .map_err(|e| FireboltError::HeaderParsing(format!("Invalid endpoint URL: {e}")))?;
 
-            let base_url = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+            let scheme = url.scheme();
+            let host = url.host_str().unwrap_or("");
+            let base_url = match url.port() {
+                Some(port) => format!("{scheme}://{host}:{port}"),
+                None => format!("{scheme}://{host}"),
+            };
             let path = url.path();
             self._engine_url = if path == "/" || path.is_empty() {
                 base_url
@@ -219,6 +265,7 @@ pub struct FireboltClientFactory {
     database_name: Option<String>,
     engine_name: Option<String>,
     account_name: Option<String>,
+    url: Option<String>,
     _api_endpoint: String,
 }
 
@@ -230,6 +277,7 @@ impl FireboltClientFactory {
             database_name: None,
             engine_name: None,
             account_name: None,
+            url: None,
             _api_endpoint: "https://api.firebolt.io".to_string(),
         }
     }
@@ -320,7 +368,99 @@ impl FireboltClientFactory {
         self
     }
 
-    pub async fn build(self) -> Result<FireboltClient, FireboltError> {
+    pub fn with_url(mut self, url: String) -> Self {
+        self.url = Some(url);
+        self
+    }
+
+    pub async fn build(mut self) -> Result<FireboltClient, FireboltError> {
+        match self.url.take() {
+            Some(url) => self.build_core(&url).await,
+            None => self.build_cloud().await,
+        }
+    }
+
+    async fn build_core(self, url: &str) -> Result<FireboltClient, FireboltError> {
+        if self.client_id.is_some() || self.client_secret.is_some() {
+            return Err(FireboltError::Configuration(
+                "client_id and client_secret cannot be combined with url: Firebolt Core has no authentication".to_string(),
+            ));
+        }
+
+        if self.account_name.is_some() {
+            return Err(FireboltError::Configuration(
+                "account_name cannot be combined with url: Firebolt Core has no accounts"
+                    .to_string(),
+            ));
+        }
+
+        if self.engine_name.is_some() {
+            return Err(FireboltError::Configuration(
+                "engine cannot be combined with url: Firebolt Core has no engines".to_string(),
+            ));
+        }
+
+        let mut client = FireboltClient {
+            _auth: None,
+            _parameters: HashMap::new(),
+            _engine_url: Self::validate_core_url(url)?,
+        };
+
+        if let Some(database_name) = self.database_name {
+            let use_database_sql = format!("USE DATABASE \"{database_name}\"");
+            client.query(&use_database_sql).await.map_err(|e| {
+                FireboltError::Configuration(format!("Failed to set database: {e}"))
+            })?;
+        }
+
+        Ok(client)
+    }
+
+    // Returns the canonical form: what the caller passed may differ from what url::Url accepted.
+    // Errors never echo the url back, since it may carry a password or a token.
+    fn validate_core_url(url: &str) -> Result<String, FireboltError> {
+        let parsed = Url::parse(url)
+            .map_err(|e| FireboltError::Configuration(format!("Invalid url: {e}")))?;
+
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return Err(FireboltError::Configuration(
+                "Invalid url: scheme must be http or https".to_string(),
+            ));
+        }
+
+        let host_missing = match parsed.host_str() {
+            Some(host) => host.is_empty(),
+            None => true,
+        };
+        if host_missing {
+            return Err(FireboltError::Configuration(
+                "Invalid url: missing host".to_string(),
+            ));
+        }
+
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(FireboltError::Configuration(
+                "Invalid url: credentials in the url are not supported, Firebolt Core has no authentication".to_string(),
+            ));
+        }
+
+        if parsed.path() != "/" && !parsed.path().is_empty() {
+            return Err(FireboltError::Configuration(
+                "Invalid url: a path is not supported, expected <scheme>://<host>[:<port>]"
+                    .to_string(),
+            ));
+        }
+
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            return Err(FireboltError::Configuration(
+                "Invalid url: a query string or fragment is not supported".to_string(),
+            ));
+        }
+
+        Ok(parsed.to_string())
+    }
+
+    async fn build_cloud(self) -> Result<FireboltClient, FireboltError> {
         // 1. Validate required parameters
         let client_id = self
             .client_id
@@ -345,12 +485,14 @@ impl FireboltClientFactory {
         let engine_url = Self::get_engine_url(&account_name, &api_endpoint, &token).await?;
 
         let mut client = FireboltClient {
-            _client_id: client_id,
-            _client_secret: client_secret,
-            _token: token,
+            _auth: Some(CloudAuth {
+                client_id,
+                client_secret,
+                api_endpoint,
+                token,
+            }),
             _parameters: HashMap::new(),
             _engine_url: engine_url,
-            _api_endpoint: api_endpoint,
         };
 
         if let Some(database_name) = self.database_name {
@@ -375,6 +517,300 @@ impl FireboltClientFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito::Matcher;
+
+    fn env_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    fn create_test_core_client(engine_url: String) -> FireboltClient {
+        FireboltClient {
+            _auth: None,
+            _parameters: HashMap::new(),
+            _engine_url: engine_url,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_request_omits_authorization_without_auth() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_header("Authorization", Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_core_client(server.url());
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_request_401_without_auth_is_not_retried() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(401)
+            .with_body("core says no")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut client = create_test_core_client(server.url());
+
+        let result = client
+            .execute_query_request(&server.url(), "SELECT 1", &HashMap::new(), true)
+            .await;
+
+        mock.assert_async().await;
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Authentication(_)));
+        assert!(format!("{error}").contains("core says no"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_no_credentials_succeeds() {
+        let server = mockito::Server::new_async().await;
+
+        let client = FireboltClient::builder()
+            .with_url(server.url())
+            .build()
+            .await
+            .expect("core build should succeed");
+
+        assert_eq!(client.client_id(), None);
+        assert_eq!(client.client_secret(), None);
+        assert_eq!(client.api_endpoint(), None);
+        assert_eq!(client.engine_url(), format!("{}/", server.url()));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_normalises_the_url() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = FireboltClient::builder()
+            .with_url(format!("{} ", server.url()))
+            .build()
+            .await
+            .expect("core build should succeed");
+
+        assert_eq!(client.engine_url(), format!("{}/", server.url()));
+
+        let result = client.query("SELECT 1").await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_core_with_database_issues_use_database() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_query(Matcher::Any)
+            .match_body("USE DATABASE \"my_db\"")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_database("my_db".to_string())
+            .build()
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_core_query_omits_authorization_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_query(Matcher::Any)
+            .match_header("Authorization", Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = FireboltClient::builder()
+            .with_url(server.url())
+            .build()
+            .await
+            .expect("core build should succeed");
+
+        let result = client.query("SELECT 1").await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_url_without_scheme() {
+        let result = FireboltClient::builder()
+            .with_url("localhost:3473".to_string())
+            .build()
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_url_without_host() {
+        let result = FireboltClient::builder()
+            .with_url("http://".to_string())
+            .build()
+            .await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_url_with_user_info() {
+        let result = FireboltClient::builder()
+            .with_url("http://user:pass@localhost:3473".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("credentials in the url"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_url_with_query_string() {
+        let result = FireboltClient::builder()
+            .with_url("http://localhost:3473?tenant=a".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("query string"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_url_with_path() {
+        let result = FireboltClient::builder()
+            .with_url("http://localhost:3473/firebolt".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("path"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_accepts_root_path() {
+        let server = mockito::Server::new_async().await;
+        let root = format!("{}/", server.url());
+
+        let result = FireboltClient::builder().with_url(root).build().await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_core_url_error_does_not_leak_credentials() {
+        let password = "p".repeat(8);
+        let authority = format!("u:{password}@localhost:3473");
+
+        let result = FireboltClient::builder()
+            .with_url(format!("http://{authority}"))
+            .build()
+            .await;
+
+        let error = format!("{}", result.unwrap_err());
+        assert!(error.contains("credentials in the url"));
+        assert!(!error.contains(&password));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_credentials() {
+        let server = mockito::Server::new_async().await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_credentials("id".to_string(), "secret".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("client_id"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_account() {
+        let server = mockito::Server::new_async().await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_account("my_account".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("account_name"));
+    }
+
+    #[tokio::test]
+    async fn test_build_core_rejects_engine() {
+        let server = mockito::Server::new_async().await;
+
+        let result = FireboltClient::builder()
+            .with_url(server.url())
+            .with_engine("my_engine".to_string())
+            .build()
+            .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Configuration(_)));
+        assert!(format!("{error}").contains("engine"));
+    }
+
+    #[test]
+    fn test_set_token_on_core_client_is_rejected() {
+        let mut client = create_test_core_client("http://localhost:3473".to_string());
+
+        let result = client.set_token("whatever".to_string());
+
+        assert!(matches!(
+            result.unwrap_err(),
+            FireboltError::Configuration(_)
+        ));
+    }
 
     #[tokio::test]
     async fn test_execute_query_request_success() {
@@ -452,10 +888,9 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FireboltError::Authentication(_)
-        ));
+        let error = result.unwrap_err();
+        assert!(matches!(error, FireboltError::Authentication(_)));
+        assert!(format!("{error}").contains("after token refresh"));
     }
 
     #[tokio::test]
@@ -485,9 +920,9 @@ mod tests {
     #[test]
     fn test_client_getters() {
         let client = create_test_client();
-        assert_eq!(client.client_id(), "test_id");
-        assert_eq!(client.client_secret(), "test_secret");
-        assert_eq!(client.api_endpoint(), "https://api.test.firebolt.io");
+        assert_eq!(client.client_id(), Some("test_id"));
+        assert_eq!(client.client_secret(), Some("test_secret"));
+        assert_eq!(client.api_endpoint(), Some("https://api.test.firebolt.io"));
         assert_eq!(client.engine_url(), "https://test.engine.url/");
         assert!(client.parameters().is_empty());
     }
@@ -495,8 +930,10 @@ mod tests {
     #[test]
     fn test_set_token() {
         let mut client = create_test_client();
-        client.set_token("new_token".to_string());
-        assert_eq!(client._token, "new_token".to_string());
+        client
+            .set_token("new_token".to_string())
+            .expect("a cloud client accepts a token");
+        assert_eq!(client._auth.as_ref().unwrap().token, "new_token");
     }
 
     #[tokio::test]
@@ -542,17 +979,20 @@ mod tests {
 
     fn create_test_client() -> FireboltClient {
         FireboltClient {
-            _client_id: "test_id".to_string(),
-            _client_secret: "test_secret".to_string(),
-            _token: "test_token".to_string(),
+            _auth: Some(CloudAuth {
+                client_id: "test_id".to_string(),
+                client_secret: "test_secret".to_string(),
+                api_endpoint: "https://api.test.firebolt.io".to_string(),
+                token: "test_token".to_string(),
+            }),
             _parameters: HashMap::new(),
             _engine_url: "https://test.engine.url/".to_string(),
-            _api_endpoint: "https://api.test.firebolt.io".to_string(),
         }
     }
 
     #[tokio::test]
     async fn test_build_missing_client_id() {
+        let _env = env_lock().lock().await;
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -582,6 +1022,7 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            url: None,
             _api_endpoint: api_endpoint,
         };
 
@@ -598,6 +1039,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_client_secret() {
+        let _env = env_lock().lock().await;
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -627,6 +1069,7 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            url: None,
             _api_endpoint: api_endpoint,
         };
 
@@ -643,6 +1086,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_missing_account_name() {
+        let _env = env_lock().lock().await;
         let mut server = mockito::Server::new_async().await;
 
         let _auth_mock = server
@@ -672,6 +1116,7 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: None,
+            url: None,
             _api_endpoint: api_endpoint,
         };
 
@@ -688,6 +1133,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_engine_url_success() {
+        let _env = env_lock().lock().await;
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -696,6 +1142,7 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            url: None,
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         };
 
@@ -712,6 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_account_not_found() {
+        let _env = env_lock().lock().await;
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -720,6 +1168,7 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("nonexistent_account".to_string()),
+            url: None,
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         };
 
@@ -736,6 +1185,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_server_error() {
+        let _env = env_lock().lock().await;
         std::env::set_var("FIREBOLT_API_ENDPOINT", "api.test.firebolt.io");
 
         let factory = FireboltClientFactory {
@@ -744,6 +1194,7 @@ mod tests {
             database_name: None,
             engine_name: None,
             account_name: Some("test_account".to_string()),
+            url: None,
             _api_endpoint: "https://api.test.firebolt.io".to_string(),
         };
 
@@ -760,6 +1211,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_default() {
+        let _env = env_lock().blocking_lock();
         std::env::remove_var("FIREBOLT_API_ENDPOINT");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -769,6 +1221,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_from_env() {
+        let _env = env_lock().blocking_lock();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "custom.api.firebolt.io");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -780,6 +1233,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_with_https_prefix() {
+        let _env = env_lock().blocking_lock();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "https://custom.api.firebolt.io");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -791,6 +1245,7 @@ mod tests {
 
     #[test]
     fn test_get_api_endpoint_with_http_prefix() {
+        let _env = env_lock().blocking_lock();
         std::env::set_var("FIREBOLT_API_ENDPOINT", "http://custom.api.firebolt.io");
 
         let result = FireboltClientFactory::get_api_endpoint();
@@ -798,6 +1253,28 @@ mod tests {
         assert_eq!(result, "http://custom.api.firebolt.io");
 
         std::env::remove_var("FIREBOLT_API_ENDPOINT");
+    }
+
+    #[tokio::test]
+    async fn test_process_response_headers_update_endpoint_keeps_port() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(HEADER_UPDATE_ENDPOINT, "http://localhost:3473/x")
+            .with_body(r#"{"meta": [{"name": "test", "type": "int"}], "data": [[1]]}"#)
+            .create_async()
+            .await;
+
+        let mut client = create_test_core_client(server.url());
+
+        let result = client.query("SELECT 1").await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(client.engine_url(), "http://localhost:3473/x");
     }
 
     #[tokio::test]
